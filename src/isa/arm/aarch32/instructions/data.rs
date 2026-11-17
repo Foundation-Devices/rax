@@ -532,49 +532,49 @@ impl<'a, M: ArmMemory> Executor<'a, M> {
     // Extension Operations
     // =========================================================================
 
-    pub(crate) fn exec_sxtb(&mut self, insn: &DecodedInsn) -> ExecResult {
+    /// (Rd, Rm, rotation) of SXTB, SXTH, UXTB and UXTH: A1 keeps the rotation in
+    /// bits 11:10, T2 Rd in 11:8 and the rotation in 5:4; T1 has no rotation.
+    fn extend_ops(&self, insn: &DecodedInsn) -> (usize, usize, u32) {
+        let raw = insn.raw;
+        if insn.state.is_thumb() && insn.size == 4 {
+            return (
+                ((raw >> 8) & 0xF) as usize,
+                (raw & 0xF) as usize,
+                ((raw >> 4) & 3) * 8,
+            );
+        }
         let (d, m) = self.dm_ops(insn);
         let rotation = if insn.state.is_thumb() {
             0
         } else {
-            ((insn.raw >> 10) & 3) * 8
+            ((raw >> 10) & 3) * 8
         };
+        (d, m, rotation)
+    }
+
+    pub(crate) fn exec_sxtb(&mut self, insn: &DecodedInsn) -> ExecResult {
+        let (d, m, rotation) = self.extend_ops(insn);
         let rotated = self.reg(m).rotate_right(rotation);
         let result = sign_extend(rotated & 0xFF, 8);
         self.set_reg(d, result)
     }
 
     pub(crate) fn exec_sxth(&mut self, insn: &DecodedInsn) -> ExecResult {
-        let (d, m) = self.dm_ops(insn);
-        let rotation = if insn.state.is_thumb() {
-            0
-        } else {
-            ((insn.raw >> 10) & 3) * 8
-        };
+        let (d, m, rotation) = self.extend_ops(insn);
         let rotated = self.reg(m).rotate_right(rotation);
         let result = sign_extend(rotated & 0xFFFF, 16);
         self.set_reg(d, result)
     }
 
     pub(crate) fn exec_uxtb(&mut self, insn: &DecodedInsn) -> ExecResult {
-        let (d, m) = self.dm_ops(insn);
-        let rotation = if insn.state.is_thumb() {
-            0
-        } else {
-            ((insn.raw >> 10) & 3) * 8
-        };
+        let (d, m, rotation) = self.extend_ops(insn);
         let rotated = self.reg(m).rotate_right(rotation);
         let result = rotated & 0xFF;
         self.set_reg(d, result)
     }
 
     pub(crate) fn exec_uxth(&mut self, insn: &DecodedInsn) -> ExecResult {
-        let (d, m) = self.dm_ops(insn);
-        let rotation = if insn.state.is_thumb() {
-            0
-        } else {
-            ((insn.raw >> 10) & 3) * 8
-        };
+        let (d, m, rotation) = self.extend_ops(insn);
         let rotated = self.reg(m).rotate_right(rotation);
         let result = rotated & 0xFFFF;
         self.set_reg(d, result)

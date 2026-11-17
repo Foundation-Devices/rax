@@ -1354,6 +1354,23 @@ fn t32_stmia_and_ldmdb_of_sp_move_it_their_own_way() {
 }
 
 #[test]
+fn t32_extends_rotate_their_source() {
+    // SXTB.W, UXTB.W, SXTH.W, UXTH.W r4, r8, ROR #24.
+    for (raw, want) in [
+        (0xfa4f_f4b8, 0xffff_ff80),
+        (0xfa5f_f4b8, 0x0000_0080),
+        (0xfa0f_f4b8, 0xffff_9180),
+        (0xfa1f_f4b8, 0x0000_9180),
+    ] {
+        let mut cpu = thumb_cpu(0x1000);
+        cpu.regs[8] = 0x80c5_fe91;
+        let mut mem = make_mem();
+        completes(Executor::new(&mut cpu, &mut mem).execute(&t32(raw)));
+        assert_eq!(cpu.regs[4], want, "{raw:#010x}");
+    }
+}
+
+#[test]
 fn thumb_adr_is_the_word_aligned_pc_plus_or_minus_its_offset() {
     // Encodings from LLVM 23.1.1: ADR r1, #24 (T1), ADR.W r0, #291 (ADDW
     // r0, pc), ADR.W r0, #-16 (SUBW r0, pc). At 0x1002 the base is
