@@ -153,7 +153,8 @@ impl<'a, M: ArmMemory> Executor<'a, M> {
                 return ExecResult::Undefined;
             }
         } else {
-            self.cpu.cpsr.to_u32()
+            // The execution state bits (IT, J, T) read as zero.
+            self.cpu.cpsr.to_u32() & 0xF8FF_03DF
         };
 
         self.cpu.regs[d] = value;

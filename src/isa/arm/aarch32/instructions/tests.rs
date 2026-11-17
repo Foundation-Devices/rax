@@ -904,6 +904,22 @@ fn irq_and_abort_entries_mask_asynchronous_aborts() {
 }
 
 #[test]
+fn thumb_mrs_reads_the_execution_state_bits_as_zero() {
+    let mut cpu = make_cpu();
+    let mut mem = make_mem();
+    cpu.cpsr = Psr::from_u32(0x6000_0030); // Z, C, Thumb, User mode
+    // mrs r10, apsr
+    let insn = crate::isa::arm::decoder::Decoder::new_thumb()
+        .decode(&[0xef, 0xf3, 0x00, 0x8a])
+        .unwrap();
+
+    let mut exec = Executor::new(&mut cpu, &mut mem);
+    assert!(matches!(exec.execute(&insn), ExecResult::Continue));
+
+    assert_eq!(cpu.regs[10], 0x6000_0010);
+}
+
+#[test]
 fn test_exception_handling() {
     let mut cpu = make_cpu();
     let mut mem = make_mem();
