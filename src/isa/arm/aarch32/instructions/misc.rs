@@ -667,6 +667,19 @@ impl<'a, M: ArmMemory> Executor<'a, M> {
         if matches!(exception, ExceptionType::Fiq | ExceptionType::Reset) {
             self.cpu.cpsr.f = true; // Disable FIQ
         }
+        // Aborts and interrupts also mask asynchronous aborts; Undefined and
+        // SVC entries leave CPSR.A as it is.
+        if matches!(
+            exception,
+            ExceptionType::Irq
+                | ExceptionType::Fiq
+                | ExceptionType::Reset
+                | ExceptionType::PrefetchAbort(_)
+                | ExceptionType::DataAbort(_)
+                | ExceptionType::Breakpoint(_)
+        ) {
+            self.cpu.cpsr.a = true;
+        }
         self.cpu.cpsr.t = self.cpu.cp15.sctlr.te();
         self.cpu.cpsr.e = self.cpu.cp15.sctlr.ee();
         self.cpu.cpsr.it_state = 0;

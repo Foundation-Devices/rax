@@ -881,6 +881,29 @@ fn test_sdiv_udiv() {
 }
 
 #[test]
+fn irq_and_abort_entries_mask_asynchronous_aborts() {
+    for (exception, masked) in [
+        (ExceptionType::Irq, true),
+        (ExceptionType::Fiq, true),
+        (ExceptionType::DataAbort(0), true),
+        (ExceptionType::PrefetchAbort(0), true),
+        (ExceptionType::SupervisorCall(0), false),
+        (ExceptionType::UndefinedInstruction, false),
+    ] {
+        let mut cpu = make_cpu();
+        let mut mem = make_mem();
+        cpu.regs[15] = 0x1000;
+        cpu.cpsr.mode = ProcessorMode::User as u8;
+        cpu.cpsr.a = false;
+
+        let mut exec = Executor::new(&mut cpu, &mut mem);
+        exec.take_exception(exception.clone());
+
+        assert_eq!(cpu.cpsr.a, masked, "{exception:?}");
+    }
+}
+
+#[test]
 fn test_exception_handling() {
     let mut cpu = make_cpu();
     let mut mem = make_mem();
