@@ -236,8 +236,55 @@ unsafe fn write_code(start: *mut u32, code: &[u32]) {
     }
 }
 
+/// Makes the instruction cache of the host read new code from the memory.
+#[cfg(all(feature = "jit", target_arch = "aarch64", target_os = "linux"))]
+unsafe fn flush_code(start: usize, end: usize) {
+    let cache_type: usize;
+    // SAFETY: the cache operations by address have no effect on the content of the
+    // memory, and Linux lets a process do them and read CTR_EL0.
+    unsafe {
+        std::arch::asm!("mrs {}, ctr_el0", out(reg) cache_type);
+        // The sizes of the smallest data and instruction cache lines, in bytes.
+        let (data_line, instruction_line) =
+            (4 << (cache_type >> 16 & 0xf), 4 << (cache_type & 0xf));
+        for line in (start & !(data_line - 1)..end).step_by(data_line) {
+            std::arch::asm!("dc cvau, {}", in(reg) line);
+        }
+        std::arch::asm!("dsb ish");
+        for line in (start & !(instruction_line - 1)..end).step_by(instruction_line) {
+            std::arch::asm!("ic ivau, {}", in(reg) line);
+        }
+        std::arch::asm!("dsb ish", "isb");
+    }
+}
+
+/// The pages of the code are not writable: this makes the pages of the range writable
+/// for the time of the copy.
+#[cfg(all(feature = "jit", target_arch = "aarch64", target_os = "linux"))]
+unsafe fn write_code(start: *mut u32, code: &[u32]) {
+    let length = code.len() * 4;
+    // SAFETY: a call with no effect.
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
+    let first = start as usize & !(page - 1);
+    let pages = (start as usize + length - first).next_multiple_of(page);
+    // SAFETY: the range (caller). The mapping of a `Jit` starts and ends at a page
+    // limit, thus these pages are pages of the mapping.
+    unsafe {
+        let writable = libc::mprotect(first as *mut _, pages, libc::PROT_READ | libc::PROT_WRITE);
+        assert_eq!(writable, 0, "mprotect of the code");
+        std::ptr::copy_nonoverlapping(code.as_ptr(), start, code.len());
+        let executable = libc::mprotect(first as *mut _, pages, libc::PROT_READ | libc::PROT_EXEC);
+        assert_eq!(executable, 0, "mprotect of the code");
+        flush_code(start as usize, start as usize + length);
+    }
+}
+
 /// `Jit::new` gives no compiler on this host.
-#[cfg(not(all(feature = "jit", target_arch = "aarch64", target_os = "macos")))]
+#[cfg(not(all(
+    feature = "jit",
+    target_arch = "aarch64",
+    any(target_os = "macos", target_os = "linux")
+)))]
 unsafe fn write_code(_start: *mut u32, _code: &[u32]) {
     unreachable!();
 }
@@ -2109,15 +2156,23 @@ fn stubs(base: usize) -> (Vec<u32>, Stubs) {
 }
 
 impl Jit {
-    /// None when the crate has no feature `jit`, or the host is not AArch64 macOS, or
-    /// gives no memory for code, or has FP controls that are not the ones of the compiled
-    /// FP code.
-    #[cfg(not(all(feature = "jit", target_arch = "aarch64", target_os = "macos")))]
+    /// None when the crate has no feature `jit`, or the host is not AArch64 macOS or
+    /// Linux, or gives no memory for code, or has FP controls that are not the ones of
+    /// the compiled FP code.
+    #[cfg(not(all(
+        feature = "jit",
+        target_arch = "aarch64",
+        any(target_os = "macos", target_os = "linux")
+    )))]
     pub fn new() -> Option<Jit> {
         None
     }
 
-    #[cfg(all(feature = "jit", target_arch = "aarch64", target_os = "macos"))]
+    #[cfg(all(
+        feature = "jit",
+        target_arch = "aarch64",
+        any(target_os = "macos", target_os = "linux")
+    ))]
     pub fn new() -> Option<Jit> {
         let fpcr: u64;
         // SAFETY: a read of a register with no effect.
@@ -2126,8 +2181,17 @@ impl Jit {
         if fpcr != 0 {
             return None;
         }
-        let flags = libc::MAP_PRIVATE | libc::MAP_ANON | libc::MAP_JIT;
-        let protection = libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC;
+        // macOS: a MAP_JIT mapping, which each thread can write or run (`write_code`).
+        #[cfg(target_os = "macos")]
+        let (flags, protection) = (
+            libc::MAP_PRIVATE | libc::MAP_ANON | libc::MAP_JIT,
+            libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC,
+        );
+        #[cfg(target_os = "linux")]
+        let (flags, protection) = (
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+            libc::PROT_READ | libc::PROT_EXEC,
+        );
         // SAFETY: a new mapping, not at a fixed address.
         let memory =
             unsafe { libc::mmap(std::ptr::null_mut(), CODE_SIZE, protection, flags, -1, 0) };

@@ -13,13 +13,21 @@ use rax::arm::{Armv7Cpu, DecodedInsn, Decoder, ExecutionState, Mnemonic, Psr};
 
 // With no compiler, the code that makes its entry and exit code has no use.
 #[cfg_attr(
-    not(all(feature = "jit", target_arch = "aarch64", target_os = "macos")),
+    not(all(
+        feature = "jit",
+        target_arch = "aarch64",
+        any(target_os = "macos", target_os = "linux")
+    )),
     allow(dead_code)
 )]
 mod a64;
 pub mod cache;
 #[cfg_attr(
-    not(all(feature = "jit", target_arch = "aarch64", target_os = "macos")),
+    not(all(
+        feature = "jit",
+        target_arch = "aarch64",
+        any(target_os = "macos", target_os = "linux")
+    )),
     allow(dead_code)
 )]
 pub mod jit;
@@ -1111,11 +1119,11 @@ fn arm_data_processing(raw: u32) -> Op {
             return match kind {
                 Alu::Add if !flags => Op::Adr {
                     rd,
-                    offset: imm as i32 + ARM_PC_OFFSET,
+                    offset: (imm as i32).wrapping_add(ARM_PC_OFFSET),
                 },
                 Alu::Sub if !flags => Op::Adr {
                     rd,
-                    offset: ARM_PC_OFFSET - imm as i32,
+                    offset: ARM_PC_OFFSET.wrapping_sub(imm as i32),
                 },
                 _ => Op::Slow,
             };

@@ -9,13 +9,13 @@ readme = "README.md"
 
 [features]
 default = ["jit"]
-# The compiler from blocks to host code. It exists only on AArch64 macOS: with another
-# host, or with no feature, the engine has the fast interpreter only.
+# The compiler from blocks to host code. It exists only on AArch64 macOS and Linux: with
+# another host, or with no feature, the engine has the fast interpreter only.
 jit = []
 
 [dependencies]
 rax = { path = "..", default-features = false }
 
-# The compiler maps its code with MAP_JIT.
-[target.'cfg(all(target_arch = "aarch64", target_os = "macos"))'.dependencies]
+# The compiler maps its code with mmap.
+[target.'cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))'.dependencies]
 libc = "0.2"
