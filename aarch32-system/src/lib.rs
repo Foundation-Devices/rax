@@ -24,6 +24,8 @@ mod tests;
 pub const MAX_INSTRUCTIONS: usize = 64;
 pub const PAGE_SIZE: usize = 4096;
 const COND_ALWAYS: u8 = 14;
+/// The mode field of the CPSR in User mode.
+const USER_MODE: u8 = 0x10;
 const SP: u8 = 13;
 const PC: u8 = 15;
 
@@ -311,6 +313,19 @@ enum Op {
     /// `align` is the alignment in bytes that the encoding asks for.
     SimdLoad { d: u8, count: u8, rn: u8, rm: u8, align: u8 },
     SimdStore { d: u8, count: u8, rn: u8, rm: u8, align: u8 },
+    /// A cache or barrier operation of CP15: no effect in a privileged mode.
+    CacheOperation,
+    /// MRC of TPIDRURW, TPIDRURO or TPIDRPRW (`register` 0 to 2).
+    ThreadRegister { rt: u8, register: u8 },
+    /// SMULBB, SMULBT, SMULTB and SMULTT: the product of two signed halves.
+    MulHalves { rd: u8, rn: u8, rm: u8, n_high: bool, m_high: bool },
+    /// VMOV between a core register and one element of a D register. `offset` is the
+    /// place of the element in the register in bytes, `size` the log2 of its bytes.
+    FpElementFromCore { d: u8, offset: u8, size: u8, rt: u8 },
+    FpElementToCore { rt: u8, d: u8, offset: u8, size: u8, signed: bool },
+    /// VDUP: an element of all the elements of D or Q. The element is the low bits of
+    /// the core register `source`, or is in the D register `source` at `offset`.
+    SimdDuplicate { quad: bool, d: u8, size: u8, from_core: bool, source: u8, offset: u8 },
     /// VLD3, VST3, VLD4 and VST4 of all the elements of 3 or 4 D registers, `spacing`
     /// apart. `size` is the log2 of the bytes of an element; `rm` and `align` are those
     /// of SimdLoad.
@@ -355,6 +370,9 @@ impl Op {
                 | Op::SimdStore { .. }
                 | Op::SimdStructure { .. }
                 | Op::SimdFloatCompare { .. }
+                | Op::FpElementFromCore { .. }
+                | Op::FpElementToCore { .. }
+                | Op::SimdDuplicate { .. }
                 | Op::SimdImmediate { .. }
                 | Op::FpLoadMultiple { .. }
                 | Op::FpStoreMultiple { .. }
@@ -1047,6 +1065,9 @@ fn thumb32(raw: u32) -> Op {
             (0, 0) if ra == PC => Op::Mul { flags: false, rd, rn, rm },
             (0, 0) => Op::Mla { rd, rn, rm, ra },
             (0, 1) if ra != PC => Op::Mls { rd, rn, rm, ra },
+            (1, halves @ 0..=3) if ra == PC => {
+                Op::MulHalves { rd, rn, rm, n_high: halves & 2 != 0, m_high: halves & 1 != 0 }
+            }
             _ => Op::Slow,
         };
     }
@@ -1066,6 +1087,25 @@ fn thumb32(raw: u32) -> Op {
     }
 
     Op::Slow
+}
+
+/// MCR and MRC of CP15 with a fast operation. The low 28 bits of the T32 encoding are
+/// those of the A32 one.
+fn system(raw: u32) -> Op {
+    let (crn, rt, opc2, crm) = (bits(raw, 16, 4), reg(raw, 12), bits(raw, 5, 3), bits(raw, 0, 4));
+    if raw & 0x0fe0_0f10 != 0x0e00_0f10 || rt >= SP {
+        return Op::Slow;
+    }
+    match (raw & 0x10_0000 != 0, crn, crm, opc2) {
+        (false, 7, 1, 0)
+        | (false, 7, 5, 0 | 1 | 4 | 6 | 7)
+        | (false, 7, 6, 1 | 2)
+        | (false, 7, 10, 1 | 2 | 4 | 5)
+        | (false, 7, 11, 1)
+        | (false, 7, 14, 1 | 2) => Op::CacheOperation,
+        (true, 13, 0, 2..=4) => Op::ThreadRegister { rt, register: (opc2 - 2) as u8 },
+        _ => Op::Slow,
+    }
 }
 
 fn executor_insn(insn: &DecodedInsn) -> DecodedInsn {
@@ -1320,6 +1360,16 @@ fn simd(insn: &DecodedInsn, raw: u32, constants: &mut Vec<u64>) -> Op {
         };
         return Op::SimdFloatCompare { kind, quad, d, n, m };
     }
+    if insn.mnemonic == Mnemonic::VDUP && raw & 0xffb0_0f90 == 0xf3b0_0c00 && !(quad && d & 1 != 0) {
+        // The field imm4 gives the size and the number of the element.
+        let imm4 = bits(raw, 16, 4);
+        let size = imm4.trailing_zeros();
+        if size > 2 {
+            return Op::Slow;
+        }
+        let offset = (imm4 >> (size + 1) << size) as u8;
+        return Op::SimdDuplicate { quad, d, size: size as u8, from_core: false, source: m, offset };
+    }
     if insn.mnemonic == Mnemonic::VMVN && raw & 0xffb3_0f90 == 0xf3b0_0580 && !(quad && (d | m) & 1 != 0) {
         return Op::SimdLogic { kind: SimdLogic::Not, quad, d, n: m, m };
     }
@@ -1409,6 +1459,39 @@ fn thumb_vfp(insn: &DecodedInsn) -> Op {
         Mnemonic::VMOV if raw >> 21 == 0xee0 >> 1 && raw & 0x7f == 0x10 && !double && rt != PC => {
             let s = single(vn, n_bit);
             if raw & 0x10_0000 == 0 { Op::FpFromCore { s, rt } } else { Op::FpToCore { rt, s } }
+        }
+        Mnemonic::VMOV if raw & 0xff00_0f1f == 0xee00_0b10 && rt < SP => {
+            // The fields opc1:opc2 give the size and the number of the element.
+            let (opc1, opc2) = (bits(raw, 21, 2), bits(raw, 5, 2));
+            let (size, element) = match () {
+                _ if opc1 & 2 != 0 => (0, (opc1 & 1) << 2 | opc2),
+                _ if opc2 & 1 != 0 => (1, (opc1 & 1) << 1 | opc2 >> 1),
+                _ if opc2 == 0 => (2, opc1 & 1),
+                _ => return Op::Slow,
+            };
+            let d = (n_bit << 4 | vn) as u8;
+            let offset = (element << size) as u8;
+            let unsigned = raw & 0x80_0000 != 0;
+            match (raw & 0x10_0000 != 0, unsigned) {
+                (true, true) if size == 2 => Op::Slow,
+                (true, _) => Op::FpElementToCore { rt, d, offset, size, signed: !unsigned && size != 2 },
+                (false, false) => Op::FpElementFromCore { d, offset, size, rt },
+                (false, true) => Op::Slow,
+            }
+        }
+        Mnemonic::VDUP if raw & 0xff90_0f5f == 0xee80_0b10 && rt < SP => {
+            let quad = raw & 0x20_0000 != 0;
+            let size = match (raw & 0x40_0000 != 0, raw & 0x20 != 0) {
+                (false, false) => 2,
+                (false, true) => 1,
+                (true, false) => 0,
+                (true, true) => return Op::Slow,
+            };
+            let d = (n_bit << 4 | vn) as u8;
+            if quad && d & 1 != 0 {
+                return Op::Slow;
+            }
+            Op::SimdDuplicate { quad, d, size, from_core: true, source: rt, offset: 0 }
         }
         _ if !data_processing => Op::Slow,
         Mnemonic::VMOV if raw & 0x00b0_00c0 == 0x00b0_0000 => {
@@ -1677,6 +1760,9 @@ impl Block {
                 // An A32 PC that is not a multiple of 4 has no fast operation.
                 (false, _) if at % 4 != 0 => Op::Slow,
                 _ if matches!(insn.mnemonic, Mnemonic::DMB | Mnemonic::DSB | Mnemonic::ISB) => Op::Nop,
+                (true, true) | (false, _) if matches!(insn.mnemonic, Mnemonic::MCR | Mnemonic::MRC) => {
+                    if !thumb && insn.raw >> 28 == 0xf { Op::Slow } else { system(insn.raw) }
+                }
                 (false, _) if insn.raw >> 25 == 0b111_1001 => simd(&insn, insn.raw, &mut constants),
                 (false, _) => arm(insn.raw),
                 (true, false) => thumb16(insn.raw, in_it),
@@ -2140,6 +2226,55 @@ impl Block {
                         PC => {}
                         SP => r!(rn) = base.wrapping_add(u32::from(count) * 8),
                         _ => r!(rn) = base.wrapping_add(r!(rm)),
+                    }
+                    None
+                }
+                Op::CacheOperation => {
+                    if cpu.cpsr.mode == USER_MODE {
+                        break Exit::Slow(index);
+                    }
+                    None
+                }
+                Op::ThreadRegister { rt, register } => {
+                    r!(rt) = match register {
+                        0 => cpu.cp15.tpidrurw,
+                        1 => cpu.cp15.tpidruro,
+                        _ if cpu.cpsr.mode == USER_MODE => break Exit::Slow(index),
+                        _ => cpu.cp15.tpidrprw,
+                    };
+                    None
+                }
+                Op::MulHalves { rd, rn, rm, n_high, m_high } => {
+                    let half = |value: u32, high: bool| i32::from((if high { value >> 16 } else { value }) as i16);
+                    r!(rd) = half(r!(rn), n_high).wrapping_mul(half(r!(rm), m_high)) as u32;
+                    None
+                }
+                Op::FpElementFromCore { d, offset, size, rt } => {
+                    let (offset, length) = (usize::from(offset), 1usize << size);
+                    let mut bytes = cpu.vfp.read_d_bits(d).to_le_bytes();
+                    bytes[offset..offset + length].copy_from_slice(&r!(rt).to_le_bytes()[..length]);
+                    cpu.vfp.write_d_bits(d, u64::from_le_bytes(bytes));
+                    None
+                }
+                Op::FpElementToCore { rt, d, offset, size, signed } => {
+                    let value = cpu.vfp.read_d_bits(d) >> (offset * 8);
+                    r!(rt) = match (size, signed) {
+                        (0, false) => u32::from(value as u8),
+                        (0, true) => value as i8 as u32,
+                        (1, false) => u32::from(value as u16),
+                        (1, true) => value as i16 as u32,
+                        _ => value as u32,
+                    };
+                    None
+                }
+                Op::SimdDuplicate { quad, d, size, from_core, source, offset } => {
+                    let element = if from_core { u64::from(r!(source)) } else { cpu.vfp.read_d_bits(source) >> (offset * 8) };
+                    let bits = 8u32 << size;
+                    let element = element & (u64::MAX >> (64 - bits));
+                    let value = (0..64 / bits).fold(0, |value, lane| value | element << (lane * bits));
+                    cpu.vfp.write_d_bits(d, value);
+                    if quad {
+                        cpu.vfp.write_d_bits(d + 1, value);
                     }
                     None
                 }

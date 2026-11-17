@@ -103,6 +103,9 @@ pub const V_ST3: u32 = 0x0c00_4000;
 pub const V_ST4: u32 = 0x0c00_0000;
 /// Makes them LD3 and LD4.
 pub const V_STRUCTURE_LOAD: u32 = 1 << 22;
+/// The low bits of a core register to each element. Bit 16 shifted by the log2 of the
+/// element size selects the size.
+pub const V_DUP: u32 = 0x0e00_0c00;
 /// A 32-bit core register to the 4 elements of a 128-bit register.
 pub const V_DUP_WORD: u32 = 0x4e04_0c00;
 /// The largest of the 4 elements of 32 bits, to the low element.

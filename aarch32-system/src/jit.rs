@@ -10,13 +10,14 @@ use std::mem::offset_of;
 use std::rc::Rc;
 
 use rax::arm::decoder::ShiftType;
+use rax::arm::cp15::Cp15State;
 use rax::arm::vfp::{self, VfpState};
 use rax::arm::{Armv7Cpu, Psr};
 
 use super::a64::{self, Asm, Label, Reg, ZR};
 use super::{
     Alu, Block, COND_ALWAYS, Carry, Extend, FPSCR_MODES, FpAccumulate, FpBinary, FpConvert, FpUnary, Index, Op, PC, SP,
-    SimdLane, SimdLogic, Step, Width,
+    SimdLane, SimdLogic, Step, USER_MODE, Width,
 };
 
 // Host registers. The guest register N is the host register N, for N from 0 to 14.
@@ -293,6 +294,10 @@ fn stays(op: Op) -> bool {
             | Op::SimdLogic { .. }
             | Op::SimdLane { .. }
             | Op::SimdImmediate { .. }
+            | Op::MulHalves { .. }
+            | Op::FpElementFromCore { .. }
+            | Op::FpElementToCore { .. }
+            | Op::SimdDuplicate { .. }
     )
 }
 
@@ -1054,6 +1059,30 @@ impl Compiler<'_> {
                 }
             }
             Op::SimdLane { .. } => self.simd_lane(step.op),
+            Op::FpElementFromCore { d, offset, size, rt } => {
+                let op = [a64::STRB, a64::STRH, a64::STR][usize::from(size)];
+                a.mem(op, rt, DREGS, usize::from(d) * 8 + usize::from(offset));
+            }
+            Op::FpElementToCore { rt, d, offset, size, signed } => {
+                let op = match (size, signed) {
+                    (0, false) => a64::LDRB,
+                    (0, true) => a64::LDRSB,
+                    (1, false) => a64::LDRH,
+                    (1, true) => a64::LDRSH,
+                    _ => a64::LDR,
+                };
+                a.mem(op, rt, DREGS, usize::from(d) * 8 + usize::from(offset));
+            }
+            Op::SimdDuplicate { quad, d, size, from_core, source, offset } => {
+                let mut element = source;
+                if !from_core {
+                    let op = [a64::LDRB, a64::LDRH, a64::LDR][usize::from(size)];
+                    a.mem(op, T0, DREGS, usize::from(source) * 8 + usize::from(offset));
+                    element = T0;
+                }
+                a.rr(a64::V_DUP | if quad { a64::QUAD } else { 0 } | 0x1_0000 << size, V0, element);
+                self.fp_reg(if quad { a64::STRQ } else { a64::STRD }, V0, d);
+            }
             Op::SimdStructure { load, d, registers, spacing, size, rn, rm, align } => {
                 self.aligned_to(index, rn, align.into());
                 self.direct(index, rn, u32::from(registers) * 8, if load { READS } else { WRITES });
@@ -1145,6 +1174,16 @@ impl Compiler<'_> {
             _ => return false,
         }
         true
+    }
+
+    /// Leaves before the instruction `index` in User mode.
+    fn privileged(&mut self, index: usize) {
+        let leave = self.leave_at(index);
+        let a = &mut self.asm;
+        a.add_imm_x(T1, STATE, CPSR + offset_of!(Psr, mode));
+        a.mem(a64::LDRB, T0, T1, 0);
+        a.imm12(a64::SUB_IMM, T0, T0, USER_MODE.into());
+        a.cbz(T0, leave);
     }
 
     /// Writes the 64-bit number in T0 to the guest registers `lo` and `hi`.
@@ -1343,6 +1382,22 @@ impl Compiler<'_> {
                 a.mov(T0, rm);
                 a.mov_imm(GUEST_LR, pc.wrapping_add(2) | 1);
                 self.jump(index);
+            }
+            Op::CacheOperation => self.privileged(index),
+            Op::ThreadRegister { rt, register } => {
+                if register == 2 {
+                    self.privileged(index);
+                }
+                let field = [offset_of!(Cp15State, tpidrurw), offset_of!(Cp15State, tpidruro), offset_of!(Cp15State, tpidrprw)];
+                self.asm.add_imm_x(T1, STATE, offset_of!(Armv7Cpu, cp15) + field[usize::from(register)]);
+                self.asm.mem(a64::LDR, rt, T1, 0);
+            }
+            Op::MulHalves { rd, rn, rm, n_high, m_high } => {
+                for (target, source, high) in [(T0, rn, n_high), (T1, rm, m_high)] {
+                    let (first_bit, last_bit) = if high { (16, 31) } else { (0, 15) };
+                    a.bitfield(a64::SBFM, target, source, first_bit, last_bit);
+                }
+                a.multiply(a64::MADD, rd, T0, T1, ZR);
             }
             op if op.is_fp() => return self.fp_op(index, step, live),
             _ => return false,

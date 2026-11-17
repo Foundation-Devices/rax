@@ -117,7 +117,7 @@ fn executor_step(cpu: &mut Armv7Cpu, memory: &mut FlatMemory, insn: &DecodedInsn
 
 /// T32 encodings of the groups that have fast operations: the fixed bits, the random
 /// bits, and true when the two copies of Rm must be equal.
-const WIDE_TEMPLATES: [(u32, u32, bool); 48] = [
+const WIDE_TEMPLATES: [(u32, u32, bool); 54] = [
     (0xf000_0000, 0x07ff_ffff, false),
     (0xf000_0000, 0x07ff_ffff, false),
     (0xe800_0000, 0x01ff_ffff, false),
@@ -170,6 +170,13 @@ const WIDE_TEMPLATES: [(u32, u32, bool); 48] = [
     (0xf900_0000, 0x0064_f1ff, false),
     (0xf900_0400, 0x0064_f1df, false),
     (0xef00_0e00, 0x106f_f0ef, false),
+    // CP15 cache operation and thread registers, SMULxy, VMOV of one element, VDUP.
+    (0xee07_0f36, 0x0000_f000, false),
+    (0xee1d_0f10, 0x0000_f0e0, false),
+    (0xfb10_f000, 0x000f_0f3f, false),
+    (0xee00_0b10, 0x00ff_f0e0, false),
+    (0xee80_0b10, 0x006f_f0a0, false),
+    (0xffb0_0c00, 0x004f_f06f, false),
 ];
 
 /// A32 encodings of the groups that have fast operations: the fixed bits and the random bits.
@@ -534,15 +541,19 @@ fn fast_interpreter_agrees_with_executor_on_random_code() {
     let mut covered: Vec<_> = covered.into_iter().collect();
     covered.sort();
     let all = [
-        "AddPc", "Adr", "AluImm", "AluReg", "Bfc", "Bfi", "Branch", "BranchExchange", "BranchLink", "BranchLinkArm",
-        "BranchLinkExchange", "BranchLinkToArm",
-        "Clz", "CompareBranch", "Extend", "FpAccumulate", "FpBinary", "FpCompare", "FpConvert", "FpFlags",
-        "FpFromCore", "FpFromCorePair", "FpImmediate", "FpLoad", "FpLoadLiteral", "FpLoadMultiple", "FpStore", "FpStoreMultiple", "FpToCore", "FpToCorePair", "FpUnary",
-        "It", "Load", "LoadLiteral", "LoadMultiple", "LoadPair", "LoadReg", "Mla", "Mls", "Movt",
-        "Mul", "Nop", "Pop", "Push", "Rbit", "Rev", "Sbfx", "Sdiv", "ShiftReg", "SimdFloatCompare", "SimdImmediate", "SimdLaneAdd", "SimdLaneAddl", "SimdLaneCeq", "SimdLaneCge", "SimdLaneCgt",
-        "SimdLaneClt0", "SimdLaneMla", "SimdLaneMls", "SimdLaneMovl", "SimdLaneMul", "SimdLaneMull", "SimdLaneQadd",
-        "SimdLaneQmovn", "SimdLaneQsub", "SimdLaneRshr", "SimdLaneRshrn", "SimdLaneShr", "SimdLaneSub", "SimdLoad", "SimdLogic", "SimdStore", "SimdStructure", "Smull", "Store", "StoreMultiple", "StorePair",
-        "StoreReg", "TableBranch", "Ubfx", "Udiv", "Umaal", "Umlal", "Umull",
+        "AddPc", "Adr", "AluImm", "AluReg", "Bfc", "Bfi", "Branch", "BranchExchange", "BranchLink",
+        "BranchLinkArm", "BranchLinkExchange", "BranchLinkToArm", "CacheOperation", "Clz", "CompareBranch",
+        "Extend", "FpAccumulate", "FpBinary", "FpCompare", "FpConvert", "FpElementFromCore",
+        "FpElementToCore", "FpFlags", "FpFromCore", "FpFromCorePair", "FpImmediate", "FpLoad",
+        "FpLoadLiteral", "FpLoadMultiple", "FpStore", "FpStoreMultiple", "FpToCore", "FpToCorePair",
+        "FpUnary", "It", "Load", "LoadLiteral", "LoadMultiple", "LoadPair", "LoadReg", "Mla", "Mls", "Movt",
+        "Mul", "MulHalves", "Nop", "Pop", "Push", "Rbit", "Rev", "Sbfx", "Sdiv", "ShiftReg", "SimdDuplicate",
+        "SimdFloatCompare", "SimdImmediate", "SimdLaneAdd", "SimdLaneAddl", "SimdLaneCeq", "SimdLaneCge",
+        "SimdLaneCgt", "SimdLaneClt0", "SimdLaneMla", "SimdLaneMls", "SimdLaneMovl", "SimdLaneMul",
+        "SimdLaneMull", "SimdLaneQadd", "SimdLaneQmovn", "SimdLaneQsub", "SimdLaneRshr", "SimdLaneRshrn",
+        "SimdLaneShr", "SimdLaneSub", "SimdLoad", "SimdLogic", "SimdStore", "SimdStructure", "Smull", "Store",
+        "StoreMultiple", "StorePair", "StoreReg", "TableBranch", "ThreadRegister", "Ubfx", "Udiv", "Umaal",
+        "Umlal", "Umull",
     ];
     assert_eq!(covered, all);
 
@@ -553,17 +564,19 @@ fn fast_interpreter_agrees_with_executor_on_random_code() {
     let mut covered: Vec<_> = compiled.covered.into_iter().collect();
     covered.sort();
     let all = [
-        "AddPc", "Adr", "AluImm", "AluReg", "Bfc", "Bfi", "Branch", "BranchExchange", "BranchLink", "BranchLinkArm",
-        "BranchLinkExchange", "BranchLinkToArm", "Clz", "CompareBranch", "Extend", "FpAccumulate", "FpBinary", "FpCompare",
-        "FpConvert", "FpFlags", "FpFromCore", "FpFromCorePair", "FpImmediate", "FpLoad", "FpLoadLiteral",
-        "FpLoadMultiple", "FpStore", "FpStoreMultiple", "FpToCore", "FpToCorePair", "FpUnary", "It", "Load",
-        "LoadLiteral", "LoadMultiple", "LoadPair", "LoadReg", "Mla", "Mls", "Movt", "Mul", "Nop", "Pop", "Push",
-        "Rbit", "Rev", "Sbfx", "Sdiv", "ShiftReg", "SimdFloatCompare", "SimdImmediate", "SimdLaneAdd", "SimdLaneAddl", "SimdLaneCeq",
-        "SimdLaneCge", "SimdLaneCgt", "SimdLaneClt0", "SimdLaneMla", "SimdLaneMls", "SimdLaneMovl", "SimdLaneMul",
+        "AddPc", "Adr", "AluImm", "AluReg", "Bfc", "Bfi", "Branch", "BranchExchange", "BranchLink",
+        "BranchLinkArm", "BranchLinkExchange", "BranchLinkToArm", "CacheOperation", "Clz", "CompareBranch",
+        "Extend", "FpAccumulate", "FpBinary", "FpCompare", "FpConvert", "FpElementFromCore",
+        "FpElementToCore", "FpFlags", "FpFromCore", "FpFromCorePair", "FpImmediate", "FpLoad",
+        "FpLoadLiteral", "FpLoadMultiple", "FpStore", "FpStoreMultiple", "FpToCore", "FpToCorePair",
+        "FpUnary", "It", "Load", "LoadLiteral", "LoadMultiple", "LoadPair", "LoadReg", "Mla", "Mls", "Movt",
+        "Mul", "MulHalves", "Nop", "Pop", "Push", "Rbit", "Rev", "Sbfx", "Sdiv", "ShiftReg", "SimdDuplicate",
+        "SimdFloatCompare", "SimdImmediate", "SimdLaneAdd", "SimdLaneAddl", "SimdLaneCeq", "SimdLaneCge",
+        "SimdLaneCgt", "SimdLaneClt0", "SimdLaneMla", "SimdLaneMls", "SimdLaneMovl", "SimdLaneMul",
         "SimdLaneMull", "SimdLaneQadd", "SimdLaneQmovn", "SimdLaneQsub", "SimdLaneRshr", "SimdLaneRshrn",
         "SimdLaneShr", "SimdLaneSub", "SimdLoad", "SimdLogic", "SimdStore", "SimdStructure", "Smull", "Store",
-        "StoreMultiple",
-        "StorePair", "StoreReg", "TableBranch", "Ubfx", "Udiv", "Umaal", "Umlal", "Umull",
+        "StoreMultiple", "StorePair", "StoreReg", "TableBranch", "ThreadRegister", "Ubfx", "Udiv", "Umaal",
+        "Umlal", "Umull",
     ];
     assert_eq!(covered, all);
 }
