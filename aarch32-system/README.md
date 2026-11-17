@@ -15,7 +15,7 @@ its memory and its time to the engine through the interfaces below.
 | `src/lib.rs` | `Block`: the decoded instructions of one page from an entry address, to an instruction that always leaves (64 at most). `Block::run`: the fast interpreter for the common Thumb, A32, VFP and Advanced SIMD operations. |
 | `src/cache.rs` | `BlockCache`: the blocks by their place in the memory of the machine, links from virtual addresses, removal of the blocks of a written page. |
 | `src/tlb.rs` | `Tlb`: a software TLB with one set of entries for each MMU configuration (an address space change keeps the entries). An entry can be direct: the access goes to host memory with no call. |
-| `src/jit.rs` | `Jit`: a compiler from hot blocks to AArch64 code. Feature `jit` (default), AArch64 macOS only. |
+| `src/jit.rs` | `Jit`: a compiler from hot blocks to AArch64 code. Feature `jit` (default), AArch64 macOS and Linux hosts. |
 | `src/a64.rs` | The AArch64 assembler of the compiler. |
 
 ## Interface
@@ -64,9 +64,8 @@ each exit in the block adds back the instructions that did not run.
 The fast interpreter runs against the `Executor` (registers, flags, VFP registers, FPSCR,
 memory), and on AArch64 macOS the compiled code runs against the fast interpreter, entered
 as a machine does (a new block at each entry, calls for half of the pages). The test fails
-when an operation did not run in an engine that has it. Use the release profile: the dev
-profile is slow, and the `Executor` has arithmetic that overflows in a build with overflow
-checks (`exec_ssat` with a saturation to 32 bits).
+when an operation did not run in an engine that has it. The dev profile also passes (it
+found two overflows of the `Executor` that only a build with overflow checks sees).
 
 `cargo test --release -p rax-aarch32-system --no-default-features` runs the same test with
 no compiler, as on another host.
@@ -77,10 +76,11 @@ instructions, UART text, pictures) and with QEMU.
 
 ## Limits
 
-- The compiler is for AArch64 macOS (MAP_JIT). A Linux AArch64 host needs its own
-  `write_code` (W^X and cache flush). Other hosts have the interpreter only; the build for
-  them was not checked on the development host (the C dependencies of rax have no cross
-  compiler there).
+- The compiler is for AArch64 macOS (MAP_JIT) and AArch64 Linux (the code pages are
+  writable only for the time of a write). Other hosts have the interpreter only.
+  Checked: `cargo zigbuild --tests` for `aarch64-unknown-linux-musl` and
+  `x86_64-unknown-linux-musl`, and a run of the two test binaries in a Linux AArch64
+  container (the x86-64 one under emulation). The gnu targets and Windows were not built.
 - Compiled code is for one virtual page of one physical page; a second virtual address of
   the same code compiles it again.
 - ARMv7-A without LPAE, big-endian data, ThumbEE or Jazelle. Short vectors and trapped FP
