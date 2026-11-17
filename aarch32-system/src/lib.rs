@@ -12,11 +12,14 @@ use rax::arm::vfp::{self, Fpscr, VfpState};
 use rax::arm::{Armv7Cpu, DecodedInsn, Decoder, ExecutionState, Mnemonic, Psr};
 
 mod a64;
+pub mod cache;
 pub mod jit;
+pub mod tlb;
 #[cfg(test)]
 mod tests;
 
 pub const MAX_INSTRUCTIONS: usize = 64;
+pub const PAGE_SIZE: usize = 4096;
 const COND_ALWAYS: u8 = 14;
 const SP: u8 = 13;
 const PC: u8 = 15;
