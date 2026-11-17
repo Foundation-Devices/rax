@@ -173,7 +173,11 @@ pub const STRQ: Mem = Mem(0x0480_0000);
 impl Mem {
     /// The log2 of the size of the access in bytes.
     fn scale(self) -> u32 {
-        if self == LDRQ || self == STRQ { 4 } else { self.0 >> 30 }
+        if self == LDRQ || self == STRQ {
+            4
+        } else {
+            self.0 >> 30
+        }
     }
 }
 
@@ -203,7 +207,8 @@ pub fn logical_imm(value: u32) -> Option<u32> {
         }
         let ones = element.count_ones();
         let run = u32::MAX >> (32 - ones);
-        let rotate_left = |by: u32| (element << by | element.checked_shr(size - by).unwrap_or(0)) & mask;
+        let rotate_left =
+            |by: u32| (element << by | element.checked_shr(size - by).unwrap_or(0)) & mask;
         if let Some(immr) = (0..size).find(|&by| rotate_left(by) == run) {
             let imms = (!(size * 2 - 1) & 0x3f) | (ones - 1);
             return Some(immr << 16 | imms << 10);
@@ -223,7 +228,12 @@ pub struct Asm {
 
 impl Asm {
     pub fn new(base: usize) -> Self {
-        Asm { base, words: Vec::new(), labels: Vec::new(), fixups: Vec::new() }
+        Asm {
+            base,
+            words: Vec::new(),
+            labels: Vec::new(),
+            fixups: Vec::new(),
+        }
     }
 
     pub fn base(&self) -> usize {
@@ -427,14 +437,24 @@ impl Asm {
     pub fn pair(&mut self, load: bool, rt: Reg, rt2: Reg, rn: Reg, offset: usize) {
         let op = if load { 0x2940_0000 } else { 0x2900_0000 };
         assert!(offset % 4 == 0 && offset < 256);
-        self.emit(op | (offset as u32 / 4) << 15 | u32::from(rt2) << 10 | u32::from(rn) << 5 | u32::from(rt));
+        self.emit(
+            op | (offset as u32 / 4) << 15
+                | u32::from(rt2) << 10
+                | u32::from(rn) << 5
+                | u32::from(rt),
+        );
     }
 
     /// LDP or STP of two 64-bit registers at `rn + offset`.
     pub fn pair_x(&mut self, load: bool, rt: Reg, rt2: Reg, rn: Reg, offset: usize) {
         let op = if load { 0xa940_0000 } else { 0xa900_0000 };
         assert!(offset % 8 == 0 && offset < 512);
-        self.emit(op | (offset as u32 / 8) << 15 | u32::from(rt2) << 10 | u32::from(rn) << 5 | u32::from(rt));
+        self.emit(
+            op | (offset as u32 / 8) << 15
+                | u32::from(rt2) << 10
+                | u32::from(rn) << 5
+                | u32::from(rt),
+        );
     }
 
     pub fn b(&mut self, label: Label) {
@@ -469,7 +489,10 @@ impl Asm {
     }
 
     pub fn tbnz(&mut self, rt: Reg, bit: u32, label: Label) {
-        self.to_label(0x3700_0000 | (bit >> 5) << 31 | (bit & 31) << 19 | u32::from(rt), label);
+        self.to_label(
+            0x3700_0000 | (bit >> 5) << 31 | (bit & 31) << 19 | u32::from(rt),
+            label,
+        );
     }
 
     pub fn br(&mut self, rn: Reg) {

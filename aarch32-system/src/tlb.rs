@@ -63,8 +63,14 @@ struct Entry {
     other: bool,
 }
 
-const NO_ENTRY: Entry =
-    Entry { page: NO_PAGE, direct_page: NO_PAGE, physical_page: 0, place: 0, addend: 0, other: false };
+const NO_ENTRY: Entry = Entry {
+    page: NO_PAGE,
+    direct_page: NO_PAGE,
+    physical_page: 0,
+    place: 0,
+    addend: 0,
+    other: false,
+};
 
 const _: () = assert!(
     ENTRIES == 1 << jit::TLB_BITS
@@ -86,7 +92,8 @@ fn new_entries() -> Box<[Cell<Entry>]> {
 }
 
 fn same_mmu(a: &V6MmuConfig, b: &V6MmuConfig) -> bool {
-    (a.enabled, a.ttbr0, a.ttbr1, a.ttbcr_n, a.dacr, a.afe) == (b.enabled, b.ttbr0, b.ttbr1, b.ttbcr_n, b.dacr, b.afe)
+    (a.enabled, a.ttbr0, a.ttbr1, a.ttbcr_n, a.dacr, a.afe)
+        == (b.enabled, b.ttbr0, b.ttbr1, b.ttbcr_n, b.dacr, b.afe)
 }
 
 fn table_index(va: u32, access: V6Access, privileged: bool) -> usize {
@@ -110,7 +117,11 @@ impl Default for Tlb {
         let mmu = V6MmuConfig::default();
         Tlb {
             mmu,
-            contexts: vec![Context { mmu, flush_count: 0, entries: new_entries() }],
+            contexts: vec![Context {
+                mmu,
+                flush_count: 0,
+                entries: new_entries(),
+            }],
             context: 0,
             next_context: 0,
             flush_count: 0,
@@ -127,11 +138,19 @@ impl Tlb {
             return;
         }
         self.mmu = mmu;
-        if let Some(index) = self.contexts.iter().position(|context| same_mmu(&context.mmu, &mmu)) {
+        if let Some(index) = self
+            .contexts
+            .iter()
+            .position(|context| same_mmu(&context.mmu, &mmu))
+        {
             self.context = index;
         } else if self.contexts.len() < CONTEXTS {
             self.context = self.contexts.len();
-            self.contexts.push(Context { mmu, flush_count: self.flush_count, entries: new_entries() });
+            self.contexts.push(Context {
+                mmu,
+                flush_count: self.flush_count,
+                entries: new_entries(),
+            });
         } else {
             self.context = self.next_context;
             self.next_context = (self.next_context + 1) % CONTEXTS;
@@ -158,7 +177,8 @@ impl Tlb {
 
     /// The page at `place` holds decoded code: the next write to it must not be direct.
     pub fn protect_code(&mut self, place: usize) {
-        let write_tables = ENTRIES * 2 * V6Access::Write as usize..ENTRIES * 2 * (V6Access::Write as usize + 1);
+        let write_tables =
+            ENTRIES * 2 * V6Access::Write as usize..ENTRIES * 2 * (V6Access::Write as usize + 1);
         for context in &mut self.contexts {
             for cell in &mut context.entries[write_tables.clone()] {
                 let entry = cell.get_mut();
@@ -199,12 +219,20 @@ impl Tlb {
                 let walk = |pa: u32| memory.table_word(pa);
                 match mmu_v6::translate_v6(&self.mmu, va, privileged, access, walk) {
                     Ok(translation) => translation.pa,
-                    Err(fault) => return Err(Fault { status: fault.fsr | fault.domain << 4 }),
+                    Err(fault) => {
+                        return Err(Fault {
+                            status: fault.fsr | fault.domain << 4,
+                        });
+                    }
                 }
             } else {
                 va
             };
-            entry = Entry { page, physical_page: pa & !PAGE_MASK, ..NO_ENTRY };
+            entry = Entry {
+                page,
+                physical_page: pa & !PAGE_MASK,
+                ..NO_ENTRY
+            };
         }
         match memory.page(entry.physical_page, access) {
             Page::Direct { place, host } => {
@@ -221,17 +249,34 @@ impl Tlb {
 
     /// `Page::Direct::place` of the page of the instruction at `va`, or None when the
     /// fetch gives a fault or is not direct.
-    pub fn code_place(&self, memory: &impl PhysicalMemory, va: u32, privileged: bool) -> Option<usize> {
+    pub fn code_place(
+        &self,
+        memory: &impl PhysicalMemory,
+        va: u32,
+        privileged: bool,
+    ) -> Option<usize> {
         let page = va & !PAGE_MASK;
-        if self.entry(va, V6Access::Execute, privileged).get().direct_page != page {
-            self.translate(memory, va, V6Access::Execute, privileged).ok()?;
+        if self
+            .entry(va, V6Access::Execute, privileged)
+            .get()
+            .direct_page
+            != page
+        {
+            self.translate(memory, va, V6Access::Execute, privileged)
+                .ok()?;
         }
         let entry = self.entry(va, V6Access::Execute, privileged).get();
         (entry.direct_page == page).then_some(entry.place as usize)
     }
 
     /// The address in the host of an access that stays in one page with a direct entry.
-    pub fn direct(&self, va: u32, access: V6Access, privileged: bool, length: usize) -> Option<usize> {
+    pub fn direct(
+        &self,
+        va: u32,
+        access: V6Access,
+        privileged: bool,
+        length: usize,
+    ) -> Option<usize> {
         let entry = self.entry(va, access, privileged).get();
         let in_page = (va & PAGE_MASK) as usize;
         (entry.direct_page == va & !PAGE_MASK && in_page + length <= PAGE_SIZE)
@@ -242,7 +287,11 @@ impl Tlb {
     /// the writes, in the form of `jit::Context`.
     pub fn direct_tables(&self, privileged: bool) -> (*const u8, *const u8) {
         let entries = &self.contexts[self.context].entries;
-        let table = |access| entries[table_index(0, access, privileged)..].as_ptr().cast();
+        let table = |access| {
+            entries[table_index(0, access, privileged)..]
+                .as_ptr()
+                .cast()
+        };
         (table(V6Access::Read), table(V6Access::Write))
     }
 }

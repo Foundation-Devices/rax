@@ -9,15 +9,15 @@ use std::collections::HashMap;
 use std::mem::offset_of;
 use std::rc::Rc;
 
-use rax::arm::decoder::ShiftType;
 use rax::arm::cp15::Cp15State;
+use rax::arm::decoder::ShiftType;
 use rax::arm::vfp::{self, VfpState};
 use rax::arm::{Armv7Cpu, Psr};
 
 use super::a64::{self, Asm, Label, Reg, ZR};
 use super::{
-    Alu, Block, COND_ALWAYS, Carry, Extend, FPSCR_MODES, FpAccumulate, FpBinary, FpConvert, FpUnary, Index, Op, PC, SP,
-    SimdLane, SimdLogic, Step, USER_MODE, Width,
+    Alu, Block, COND_ALWAYS, Carry, Extend, FPSCR_MODES, FpAccumulate, FpBinary, FpConvert,
+    FpUnary, Index, Op, PC, SP, SimdLane, SimdLogic, Step, USER_MODE, Width,
 };
 
 // Host registers. The guest register N is the host register N, for N from 0 to 14.
@@ -147,11 +147,19 @@ pub struct FpControls {
 /// The state of a block for the compiler.
 #[derive(Clone, Copy)]
 pub enum Tier {
-    Cold { runs: u32 },
+    Cold {
+        runs: u32,
+    },
     /// The first instruction of the block has no compiled form.
-    Declined { generation: u32 },
+    Declined {
+        generation: u32,
+    },
     /// Code for the block at the virtual page `page`.
-    Code { entry: usize, page: u32, generation: u32 },
+    Code {
+        entry: usize,
+        page: u32,
+        generation: u32,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -249,7 +257,10 @@ fn condition_flags(cond: u8) -> u8 {
 }
 
 fn is_arithmetic(kind: Alu) -> bool {
-    matches!(kind, Alu::Add | Alu::Adc | Alu::Sub | Alu::Sbc | Alu::Rsb | Alu::Cmp | Alu::Cmn)
+    matches!(
+        kind,
+        Alu::Add | Alu::Adc | Alu::Sub | Alu::Sbc | Alu::Rsb | Alu::Cmp | Alu::Cmn
+    )
 }
 
 /// True when the compiled code of the operation never leaves the block.
@@ -304,8 +315,14 @@ fn stays(op: Op) -> bool {
 /// The flags that the operation reads and the flags that it always writes.
 fn flag_effect(op: Op) -> (u8, u8) {
     match op {
-        Op::AluImm { kind, flags, carry, .. } => {
-            let reads = if matches!(kind, Alu::Adc | Alu::Sbc) { C } else { 0 };
+        Op::AluImm {
+            kind, flags, carry, ..
+        } => {
+            let reads = if matches!(kind, Alu::Adc | Alu::Sbc) {
+                C
+            } else {
+                0
+            };
             let writes = match () {
                 _ if !flags => 0,
                 _ if is_arithmetic(kind) => ALL_FLAGS,
@@ -314,8 +331,18 @@ fn flag_effect(op: Op) -> (u8, u8) {
             };
             (reads, writes)
         }
-        Op::AluReg { kind, flags, shift, amount, .. } => {
-            let mut reads = if matches!(kind, Alu::Adc | Alu::Sbc) { C } else { 0 };
+        Op::AluReg {
+            kind,
+            flags,
+            shift,
+            amount,
+            ..
+        } => {
+            let mut reads = if matches!(kind, Alu::Adc | Alu::Sbc) {
+                C
+            } else {
+                0
+            };
             if shift == ShiftType::RRX {
                 reads |= C;
             }
@@ -392,7 +419,8 @@ impl Compiler<'_> {
 
     fn give_back(&mut self, instructions: usize) {
         if instructions != 0 {
-            self.asm.imm12(a64::ADD_IMM | a64::X, BUDGET, BUDGET, instructions as u32);
+            self.asm
+                .imm12(a64::ADD_IMM | a64::X, BUDGET, BUDGET, instructions as u32);
         }
     }
 
@@ -474,13 +502,26 @@ impl Compiler<'_> {
         a.msr(a64::NZCV, T1);
     }
 
-    fn alu_imm(&mut self, kind: Alu, flags: bool, carry: Carry, rd: Reg, rn: Reg, imm: u32, live: u8) {
+    fn alu_imm(
+        &mut self,
+        kind: Alu,
+        flags: bool,
+        carry: Carry,
+        rd: Reg,
+        rn: Reg,
+        imm: u32,
+        live: u8,
+    ) {
         let set = flags && live != 0;
         if kind.is_compare() && !set {
             return;
         }
         let a = &mut self.asm;
-        let rd = if kind.is_compare() && is_arithmetic(kind) { ZR } else { rd };
+        let rd = if kind.is_compare() && is_arithmetic(kind) {
+            ZR
+        } else {
+            rd
+        };
         match kind {
             Alu::Add | Alu::Cmn | Alu::Sub | Alu::Cmp => {
                 let (with_imm, with_register) = match (matches!(kind, Alu::Sub | Alu::Cmp), set) {
@@ -512,7 +553,11 @@ impl Compiler<'_> {
                 a.rrr(with_carry(kind, set), rd, rn, T1);
             }
             _ => {
-                let value = if matches!(kind, Alu::Bic | Alu::Orn | Alu::Mvn) { !imm } else { imm };
+                let value = if matches!(kind, Alu::Bic | Alu::Orn | Alu::Mvn) {
+                    !imm
+                } else {
+                    imm
+                };
                 let result = if kind.is_compare() { T3 } else { rd };
                 let (with_imm, with_register) = match kind {
                     Alu::Mov | Alu::Mvn => (0, 0),
@@ -539,7 +584,17 @@ impl Compiler<'_> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn alu_reg(&mut self, kind: Alu, flags: bool, rd: Reg, rn: Reg, rm: Reg, shift: ShiftType, amount: u32, live: u8) {
+    fn alu_reg(
+        &mut self,
+        kind: Alu,
+        flags: bool,
+        rd: Reg,
+        rn: Reg,
+        rm: Reg,
+        shift: ShiftType,
+        amount: u32,
+        live: u8,
+    ) {
         let set = flags && live != 0;
         if kind.is_compare() && !set {
             return;
@@ -576,7 +631,8 @@ impl Compiler<'_> {
             }
         };
         // ADD and SUB have no rotation, and the others take only a register.
-        let plain = matches!(kind, Alu::Rsb | Alu::Adc | Alu::Sbc) || (arithmetic && host_shift == a64::ROR);
+        let plain = matches!(kind, Alu::Rsb | Alu::Adc | Alu::Sbc)
+            || (arithmetic && host_shift == a64::ROR);
         if plain && host_amount != 0 {
             a.shifted(a64::ORR, T1, ZR, operand, host_shift, host_amount);
             (operand, host_shift, host_amount) = (T1, a64::LSL, 0);
@@ -616,7 +672,16 @@ impl Compiler<'_> {
     /// A shift by the low byte of Rm. The code has only the amounts below 32, and with
     /// the flags only the amounts that are not 0.
     #[allow(clippy::too_many_arguments)]
-    fn shift_reg(&mut self, index: usize, shift: ShiftType, flags: bool, rd: Reg, rn: Reg, rm: Reg, live: u8) {
+    fn shift_reg(
+        &mut self,
+        index: usize,
+        shift: ShiftType,
+        flags: bool,
+        rd: Reg,
+        rn: Reg,
+        rm: Reg,
+        live: u8,
+    ) {
         let leave = self.leave_at(index);
         let a = &mut self.asm;
         let op = match shift {
@@ -710,14 +775,39 @@ impl Compiler<'_> {
     /// A load or a store of one register at the guest address in `address`: the access
     /// with a direct entry here, each other access with a call (`slow_access`).
     #[allow(clippy::too_many_arguments)]
-    fn access(&mut self, index: usize, load: bool, width: Width, rt: Reg, rn: Reg, mode: Index, offset: i32, address: Reg) {
-        let (op, size) = if load { load_of(width) } else { store_of(width) };
+    fn access(
+        &mut self,
+        index: usize,
+        load: bool,
+        width: Width,
+        rt: Reg,
+        rn: Reg,
+        mode: Index,
+        offset: i32,
+        address: Reg,
+    ) {
+        let (op, size) = if load {
+            load_of(width)
+        } else {
+            store_of(width)
+        };
         let (start, done) = (self.asm.label(), self.asm.label());
         self.direct_or(start, address, size, if load { READS } else { WRITES });
         self.asm.mem_uxtw(op, rt, T1, address);
         self.writeback(rn, mode, offset, address);
         self.asm.bind(done);
-        self.slow.push(SlowAccess { start, done, index, load, width, rt, rn, mode, offset, address });
+        self.slow.push(SlowAccess {
+            start,
+            done,
+            index,
+            load,
+            width,
+            rt,
+            rn,
+            mode,
+            offset,
+            address,
+        });
     }
 
     /// The code of an access with a call.
@@ -732,9 +822,17 @@ impl Compiler<'_> {
         if !access.load {
             a.mov(T1, access.rt);
         }
-        let size = if access.load { load_of(access.width).1 } else { store_of(access.width).1 };
+        let size = if access.load {
+            load_of(access.width).1
+        } else {
+            store_of(access.width).1
+        };
         a.mov_imm(T2, size | rest << 8);
-        a.bl_to(if access.load { self.stubs.call_load } else { self.stubs.call_store });
+        a.bl_to(if access.load {
+            self.stubs.call_load
+        } else {
+            self.stubs.call_store
+        });
         a.tbnz(T1, 1, retry);
         if access.load {
             match access.width {
@@ -755,7 +853,12 @@ impl Compiler<'_> {
     /// address is a multiple of 4, or the code leaves before the instruction `index`.
     fn words(&mut self, index: usize, load: bool, registers: &[Reg], address: Reg) {
         self.aligned(index, address);
-        self.direct(index, address, registers.len() as u32 * 4, if load { READS } else { WRITES });
+        self.direct(
+            index,
+            address,
+            registers.len() as u32 * 4,
+            if load { READS } else { WRITES },
+        );
         let a = &mut self.asm;
         a.add_uxtw(T1, T1, address);
         for (pair, registers) in registers.chunks(2).enumerate() {
@@ -782,14 +885,23 @@ impl Compiler<'_> {
     /// register at D`number`.
     fn fp_reg(&mut self, op: a64::Mem, host: Reg, number: u8) {
         let single = op == a64::LDRS || op == a64::STRS || op == a64::LDR || op == a64::STR;
-        let offset = if single { usize::from(number) * 4 } else { usize::from(number) * 8 };
+        let offset = if single {
+            usize::from(number) * 4
+        } else {
+            usize::from(number) * 8
+        };
         self.asm.mem(op, host, DREGS, offset);
     }
 
     /// Loads or stores `count` D registers from D`d` at the guest address in `address`.
     #[allow(clippy::too_many_arguments)]
     fn fp_block(&mut self, index: usize, load: bool, d: u8, count: u8, address: Reg) {
-        self.direct(index, address, u32::from(count) * 8, if load { READS } else { WRITES });
+        self.direct(
+            index,
+            address,
+            u32::from(count) * 8,
+            if load { READS } else { WRITES },
+        );
         self.asm.add_uxtw(T1, T1, address);
         for register in 0..count {
             let (guest, host) = (usize::from(d + register) * 8, usize::from(register) * 8);
@@ -814,13 +926,34 @@ impl Compiler<'_> {
     }
 
     fn simd_lane(&mut self, op: Op) {
-        let Op::SimdLane { kind, size, quad, unsigned, d, n, m, imm } = op else {
+        let Op::SimdLane {
+            kind,
+            size,
+            quad,
+            unsigned,
+            d,
+            n,
+            m,
+            imm,
+        } = op
+        else {
             unreachable!();
         };
         let element = 8 << size;
-        let source_quad = if kind.is_long() { false } else { quad || kind.is_narrow() };
-        let result_quad = if kind.is_narrow() { false } else { quad || kind.is_long() };
-        let (load, store) = (if source_quad { a64::LDRQ } else { a64::LDRD }, if result_quad { a64::STRQ } else { a64::STRD });
+        let source_quad = if kind.is_long() {
+            false
+        } else {
+            quad || kind.is_narrow()
+        };
+        let result_quad = if kind.is_narrow() {
+            false
+        } else {
+            quad || kind.is_long()
+        };
+        let (load, store) = (
+            if source_quad { a64::LDRQ } else { a64::LDRD },
+            if result_quad { a64::STRQ } else { a64::STRD },
+        );
         if !kind.has_one_operand() {
             self.fp_reg(load, V0, n);
         }
@@ -870,10 +1003,18 @@ impl Compiler<'_> {
         let arithmetic = self.fp_arithmetic();
         let a = &mut self.asm;
         let precision = |double: bool| if double { a64::DOUBLE } else { 0 };
-        let (load_of, store_of) =
-            (|double: bool| if double { a64::LDRD } else { a64::LDRS }, |double: bool| if double { a64::STRD } else { a64::STRS });
+        let (load_of, store_of) = (
+            |double: bool| if double { a64::LDRD } else { a64::LDRS },
+            |double: bool| if double { a64::STRD } else { a64::STRS },
+        );
         match step.op {
-            Op::FpBinary { kind, double, d, n, m } if arithmetic => {
+            Op::FpBinary {
+                kind,
+                double,
+                d,
+                n,
+                m,
+            } if arithmetic => {
                 self.fp_reg(load_of(double), V0, n);
                 self.fp_reg(load_of(double), V1, m);
                 let op = match kind {
@@ -888,7 +1029,13 @@ impl Compiler<'_> {
                 }
                 self.fp_reg(store_of(double), V0, d);
             }
-            Op::FpAccumulate { kind, double, d, n, m } if arithmetic => {
+            Op::FpAccumulate {
+                kind,
+                double,
+                d,
+                n,
+                m,
+            } if arithmetic => {
                 self.fp_reg(load_of(double), V0, n);
                 self.fp_reg(load_of(double), V1, m);
                 self.fp_reg(load_of(double), V2, d);
@@ -903,7 +1050,10 @@ impl Compiler<'_> {
                 a.rrr(a64::FADD | precision(double), V0, V2, V0);
                 self.fp_reg(store_of(double), V0, d);
             }
-            Op::FpUnary { kind: FpUnary::Sqrt, .. } if !arithmetic => return false,
+            Op::FpUnary {
+                kind: FpUnary::Sqrt,
+                ..
+            } if !arithmetic => return false,
             Op::FpUnary { kind, double, d, m } => {
                 self.fp_reg(load_of(double), V0, m);
                 match kind {
@@ -914,7 +1064,13 @@ impl Compiler<'_> {
                 }
                 self.fp_reg(store_of(double), V0, d);
             }
-            Op::FpCompare { all_nans_signal, with_zero, double, d, m } if arithmetic => {
+            Op::FpCompare {
+                all_nans_signal,
+                with_zero,
+                double,
+                d,
+                m,
+            } if arithmetic => {
                 self.fp_reg(load_of(double), V0, d);
                 let mut op = a64::FCMP | precision(double);
                 if all_nans_signal {
@@ -940,11 +1096,19 @@ impl Compiler<'_> {
                 a.rrr(a64::ORR, T2, T2, T1);
                 a.mem(a64::STR, T2, STATE, FPSCR);
             }
-            Op::FpImmediate { double: false, d, imm } => {
+            Op::FpImmediate {
+                double: false,
+                d,
+                imm,
+            } => {
                 a.mov_imm(T0, vfp::vfp_expand_imm_f32(imm));
                 self.fp_reg(a64::STR, T0, d);
             }
-            Op::FpImmediate { double: true, d, imm } => {
+            Op::FpImmediate {
+                double: true,
+                d,
+                imm,
+            } => {
                 a.mov_imm64(T0, vfp::vfp_expand_imm_f64(imm));
                 self.fp_reg(a64::STRX, T0, d);
             }
@@ -973,27 +1137,53 @@ impl Compiler<'_> {
             }
             Op::FpFromCore { s, rt } => self.fp_reg(a64::STR, rt, s),
             Op::FpToCore { rt, s } => self.fp_reg(a64::LDR, rt, s),
-            Op::FpFromCorePair { double: false, v, rt, rt2 } => {
+            Op::FpFromCorePair {
+                double: false,
+                v,
+                rt,
+                rt2,
+            } => {
                 self.fp_reg(a64::STR, rt, v);
                 self.fp_reg(a64::STR, rt2, v + 1);
             }
-            Op::FpFromCorePair { double: true, v, rt, rt2 } => {
+            Op::FpFromCorePair {
+                double: true,
+                v,
+                rt,
+                rt2,
+            } => {
                 a.shifted(a64::ORR | a64::X, T0, rt, rt2, a64::LSL, 32);
                 self.fp_reg(a64::STRX, T0, v);
             }
-            Op::FpToCorePair { double: false, rt, rt2, v } => {
+            Op::FpToCorePair {
+                double: false,
+                rt,
+                rt2,
+                v,
+            } => {
                 self.fp_reg(a64::LDR, rt, v);
                 self.fp_reg(a64::LDR, rt2, v + 1);
             }
-            Op::FpToCorePair { double: true, rt, rt2, v } => {
+            Op::FpToCorePair {
+                double: true,
+                rt,
+                rt2,
+                v,
+            } => {
                 self.fp_reg(a64::LDRX, T0, v);
                 self.split(rt, rt2);
             }
-            Op::FpLoad { double, d, rn, offset } => {
+            Op::FpLoad {
+                double,
+                d,
+                rn,
+                offset,
+            } => {
                 let address = self.address(rn, Index::Offset, offset);
                 self.aligned(index, address);
                 self.direct(index, address, if double { 8 } else { 4 }, READS);
-                self.asm.mem_uxtw(if double { a64::LDRX } else { a64::LDR }, T0, T1, address);
+                self.asm
+                    .mem_uxtw(if double { a64::LDRX } else { a64::LDR }, T0, T1, address);
                 self.fp_reg(if double { a64::STRX } else { a64::STR }, T0, d);
             }
             Op::FpLoadLiteral { double, d, offset } => {
@@ -1014,25 +1204,41 @@ impl Compiler<'_> {
                 } else {
                     a.mov_imm(T0, address);
                     self.direct(index, T0, size, READS);
-                    self.asm.mem_uxtw(if double { a64::LDRX } else { a64::LDR }, T0, T1, T0);
+                    self.asm
+                        .mem_uxtw(if double { a64::LDRX } else { a64::LDR }, T0, T1, T0);
                 }
                 self.fp_reg(if double { a64::STRX } else { a64::STR }, T0, d);
             }
-            Op::FpStore { double, d, rn, offset } => {
+            Op::FpStore {
+                double,
+                d,
+                rn,
+                offset,
+            } => {
                 let address = self.address(rn, Index::Offset, offset);
                 self.aligned(index, address);
                 self.direct(index, address, if double { 8 } else { 4 }, WRITES);
                 self.fp_reg(if double { a64::LDRX } else { a64::LDR }, T2, d);
-                self.asm.mem_uxtw(if double { a64::STRX } else { a64::STR }, T2, T1, address);
+                self.asm
+                    .mem_uxtw(if double { a64::STRX } else { a64::STR }, T2, T1, address);
             }
             Op::FpFlags => {
                 a.mem(a64::LDR, T0, STATE, FPSCR);
                 a.logical(a64::AND_IMM, T0, T0, 0xf000_0000);
                 a.msr(a64::NZCV, T0);
             }
-            Op::SimdLogic { kind, quad, d, n, m } => {
-                let (load, store, quad) =
-                    if quad { (a64::LDRQ, a64::STRQ, a64::QUAD) } else { (a64::LDRD, a64::STRD, 0) };
+            Op::SimdLogic {
+                kind,
+                quad,
+                d,
+                n,
+                m,
+            } => {
+                let (load, store, quad) = if quad {
+                    (a64::LDRQ, a64::STRQ, a64::QUAD)
+                } else {
+                    (a64::LDRD, a64::STRD, 0)
+                };
                 self.fp_reg(load, V0, n);
                 self.fp_reg(load, V1, m);
                 let (op, with_destination) = match kind {
@@ -1059,11 +1265,22 @@ impl Compiler<'_> {
                 }
             }
             Op::SimdLane { .. } => self.simd_lane(step.op),
-            Op::FpElementFromCore { d, offset, size, rt } => {
+            Op::FpElementFromCore {
+                d,
+                offset,
+                size,
+                rt,
+            } => {
                 let op = [a64::STRB, a64::STRH, a64::STR][usize::from(size)];
                 a.mem(op, rt, DREGS, usize::from(d) * 8 + usize::from(offset));
             }
-            Op::FpElementToCore { rt, d, offset, size, signed } => {
+            Op::FpElementToCore {
+                rt,
+                d,
+                offset,
+                size,
+                signed,
+            } => {
                 let op = match (size, signed) {
                     (0, false) => a64::LDRB,
                     (0, true) => a64::LDRSB,
@@ -1073,39 +1290,84 @@ impl Compiler<'_> {
                 };
                 a.mem(op, rt, DREGS, usize::from(d) * 8 + usize::from(offset));
             }
-            Op::SimdDuplicate { quad, d, size, from_core, source, offset } => {
+            Op::SimdDuplicate {
+                quad,
+                d,
+                size,
+                from_core,
+                source,
+                offset,
+            } => {
                 let mut element = source;
                 if !from_core {
                     let op = [a64::LDRB, a64::LDRH, a64::LDR][usize::from(size)];
                     a.mem(op, T0, DREGS, usize::from(source) * 8 + usize::from(offset));
                     element = T0;
                 }
-                a.rr(a64::V_DUP | if quad { a64::QUAD } else { 0 } | 0x1_0000 << size, V0, element);
+                a.rr(
+                    a64::V_DUP | if quad { a64::QUAD } else { 0 } | 0x1_0000 << size,
+                    V0,
+                    element,
+                );
                 self.fp_reg(if quad { a64::STRQ } else { a64::STRD }, V0, d);
             }
-            Op::SimdStructure { load, d, registers, spacing, size, rn, rm, align } => {
+            Op::SimdStructure {
+                load,
+                d,
+                registers,
+                spacing,
+                size,
+                rn,
+                rm,
+                align,
+            } => {
                 self.aligned_to(index, rn, align.into());
-                self.direct(index, rn, u32::from(registers) * 8, if load { READS } else { WRITES });
+                self.direct(
+                    index,
+                    rn,
+                    u32::from(registers) * 8,
+                    if load { READS } else { WRITES },
+                );
                 self.asm.add_uxtw(T1, T1, rn);
                 // The host has the same order of the elements, with registers in sequence.
-                let op = (if registers == 4 { a64::V_ST4 } else { a64::V_ST3 }) | u32::from(size) << 10;
+                let op = (if registers == 4 {
+                    a64::V_ST4
+                } else {
+                    a64::V_ST3
+                }) | u32::from(size) << 10;
                 if load {
                     self.asm.rr(op | a64::V_STRUCTURE_LOAD, V0, T1);
                 }
                 for number in 0..registers {
-                    self.fp_reg(if load { a64::STRD } else { a64::LDRD }, V0 + number, d + number * spacing);
+                    self.fp_reg(
+                        if load { a64::STRD } else { a64::LDRD },
+                        V0 + number,
+                        d + number * spacing,
+                    );
                 }
                 if !load {
                     self.asm.rr(op, V0, T1);
                 }
                 match rm {
                     PC => {}
-                    SP => self.asm.imm12(a64::ADD_IMM, rn, rn, u32::from(registers) * 8),
+                    SP => self
+                        .asm
+                        .imm12(a64::ADD_IMM, rn, rn, u32::from(registers) * 8),
                     _ => self.asm.rrr(a64::ADD, rn, rn, rm),
                 }
             }
-            Op::SimdFloatCompare { kind, quad, d, n, m } => {
-                let (load, store) = if quad { (a64::LDRQ, a64::STRQ) } else { (a64::LDRD, a64::STRD) };
+            Op::SimdFloatCompare {
+                kind,
+                quad,
+                d,
+                n,
+                m,
+            } => {
+                let (load, store) = if quad {
+                    (a64::LDRQ, a64::STRQ)
+                } else {
+                    (a64::LDRD, a64::STRD)
+                };
                 self.fp_reg(load, V0, n);
                 self.fp_reg(load, V1, m);
                 let leave = self.leave_at(index);
@@ -1121,10 +1383,20 @@ impl Compiler<'_> {
                 a.rr(a64::V_DUP_WORD, infinity, T0);
                 for (operand, target) in [(V0, bad), (V1, first)] {
                     a.rr(a64::V_FABS, magnitude, operand);
-                    a.rrr(a64::V_CMGT | a64::UNSIGNED | words, target, smallest, magnitude);
+                    a.rrr(
+                        a64::V_CMGT | a64::UNSIGNED | words,
+                        target,
+                        smallest,
+                        magnitude,
+                    );
                     a.rrr(a64::V_CMTST | words, second, magnitude, magnitude);
                     a.rrr(a64::V_AND | a64::QUAD, target, target, second);
-                    a.rrr(a64::V_CMGT | a64::UNSIGNED | words, second, magnitude, infinity);
+                    a.rrr(
+                        a64::V_CMGT | a64::UNSIGNED | words,
+                        second,
+                        magnitude,
+                        infinity,
+                    );
                     a.rrr(a64::V_ORR | a64::QUAD, target, target, second);
                 }
                 a.rrr(a64::V_ORR | a64::QUAD, bad, bad, first);
@@ -1146,7 +1418,20 @@ impl Compiler<'_> {
                     self.fp_reg(a64::STRX, T0, d + 1);
                 }
             }
-            Op::SimdLoad { d, count, rn, rm, align } | Op::SimdStore { d, count, rn, rm, align } => {
+            Op::SimdLoad {
+                d,
+                count,
+                rn,
+                rm,
+                align,
+            }
+            | Op::SimdStore {
+                d,
+                count,
+                rn,
+                rm,
+                align,
+            } => {
                 self.aligned_to(index, rn, align.into());
                 self.fp_block(index, matches!(step.op, Op::SimdLoad { .. }), d, count, rn);
                 match rm {
@@ -1155,8 +1440,20 @@ impl Compiler<'_> {
                     _ => self.asm.rrr(a64::ADD, rn, rn, rm),
                 }
             }
-            Op::FpLoadMultiple { d, count, rn, decrement, writeback }
-            | Op::FpStoreMultiple { d, count, rn, decrement, writeback } => {
+            Op::FpLoadMultiple {
+                d,
+                count,
+                rn,
+                decrement,
+                writeback,
+            }
+            | Op::FpStoreMultiple {
+                d,
+                count,
+                rn,
+                decrement,
+                writeback,
+            } => {
                 let size = u32::from(count) * 8;
                 let mut start = rn;
                 if decrement {
@@ -1164,7 +1461,13 @@ impl Compiler<'_> {
                     start = T0;
                 }
                 self.aligned(index, start);
-                self.fp_block(index, matches!(step.op, Op::FpLoadMultiple { .. }), d, count, start);
+                self.fp_block(
+                    index,
+                    matches!(step.op, Op::FpLoadMultiple { .. }),
+                    d,
+                    count,
+                    start,
+                );
                 match (writeback, decrement) {
                     (false, _) => {}
                     (true, true) => self.asm.mov(rn, T0),
@@ -1200,18 +1503,46 @@ impl Compiler<'_> {
         let a = &mut self.asm;
         match step.op {
             Op::Nop | Op::It { .. } => {}
-            Op::AluImm { kind, flags, carry, rd, rn, imm } => self.alu_imm(kind, flags, carry, rd, rn, imm, live),
-            Op::AluReg { kind, flags, rd, rn, rm, shift, amount } => {
+            Op::AluImm {
+                kind,
+                flags,
+                carry,
+                rd,
+                rn,
+                imm,
+            } => self.alu_imm(kind, flags, carry, rd, rn, imm, live),
+            Op::AluReg {
+                kind,
+                flags,
+                rd,
+                rn,
+                rm,
+                shift,
+                amount,
+            } => {
                 self.alu_reg(kind, flags, rd, rn, rm, shift, amount.into(), live);
             }
-            Op::ShiftReg { shift, flags, rd, rn, rm } => self.shift_reg(index, shift, flags, rd, rn, rm, live),
+            Op::ShiftReg {
+                shift,
+                flags,
+                rd,
+                rn,
+                rm,
+            } => self.shift_reg(index, shift, flags, rd, rn, rm, live),
             Op::Movt { rd, imm } => a.movk_high(rd, imm.into()),
-            Op::Adr { rd, offset } => a.mov_imm(rd, (pc.wrapping_add(4) & !3).wrapping_add(offset as u32)),
+            Op::Adr { rd, offset } => {
+                a.mov_imm(rd, (pc.wrapping_add(4) & !3).wrapping_add(offset as u32))
+            }
             Op::AddPc { rd } => {
                 a.mov_imm(T1, pc.wrapping_add(4));
                 a.rrr(a64::ADD, rd, rd, T1);
             }
-            Op::Extend { kind, rd, rm, rotation } => {
+            Op::Extend {
+                kind,
+                rd,
+                rm,
+                rotation,
+            } => {
                 let mut source = rm;
                 if rotation != 0 {
                     a.extr(T1, rm, rm, rotation.into());
@@ -1233,10 +1564,22 @@ impl Compiler<'_> {
                 a.bitfield(a64::SBFM, rd, rn, lsb.into(), u32::from(lsb + width) - 1);
             }
             Op::Bfi { rd, rn, lsb, width } => {
-                a.bitfield(a64::BFM, rd, rn, (32 - u32::from(lsb)) % 32, u32::from(width) - 1);
+                a.bitfield(
+                    a64::BFM,
+                    rd,
+                    rn,
+                    (32 - u32::from(lsb)) % 32,
+                    u32::from(width) - 1,
+                );
             }
             Op::Bfc { rd, lsb, width } => {
-                a.bitfield(a64::BFM, rd, ZR, (32 - u32::from(lsb)) % 32, u32::from(width) - 1);
+                a.bitfield(
+                    a64::BFM,
+                    rd,
+                    ZR,
+                    (32 - u32::from(lsb)) % 32,
+                    u32::from(width) - 1,
+                );
             }
             Op::Mul { flags, rd, rn, rm } => {
                 a.multiply(a64::MADD, rd, rn, rm, ZR);
@@ -1266,19 +1609,43 @@ impl Compiler<'_> {
             }
             Op::Udiv { rd, rn, rm } => a.rrr(a64::UDIV, rd, rn, rm),
             Op::Sdiv { rd, rn, rm } => a.rrr(a64::SDIV, rd, rn, rm),
-            Op::Load { width, rt, rn, index: mode, offset } => {
+            Op::Load {
+                width,
+                rt,
+                rn,
+                index: mode,
+                offset,
+            } => {
                 let address = self.address(rn, mode, offset);
                 self.access(index, true, width, rt, rn, mode, offset, address);
             }
-            Op::Store { width, rt, rn, index: mode, offset } => {
+            Op::Store {
+                width,
+                rt,
+                rn,
+                index: mode,
+                offset,
+            } => {
                 let address = self.address(rn, mode, offset);
                 self.access(index, false, width, rt, rn, mode, offset, address);
             }
-            Op::LoadReg { width, rt, rn, rm, shift } => {
+            Op::LoadReg {
+                width,
+                rt,
+                rn,
+                rm,
+                shift,
+            } => {
                 a.shifted(a64::ADD, T0, rn, rm, a64::LSL, shift.into());
                 self.access(index, true, width, rt, rn, Index::Offset, 0, T0);
             }
-            Op::StoreReg { width, rt, rn, rm, shift } => {
+            Op::StoreReg {
+                width,
+                rt,
+                rn,
+                rm,
+                shift,
+            } => {
                 a.shifted(a64::ADD, T0, rn, rm, a64::LSL, shift.into());
                 self.access(index, false, width, rt, rn, Index::Offset, 0, T0);
             }
@@ -1303,35 +1670,68 @@ impl Compiler<'_> {
                     self.asm.mem_uxtw(op, rt, T1, T0);
                 }
             }
-            Op::LoadPair { rt, rt2, rn, index: mode, offset } => {
+            Op::LoadPair {
+                rt,
+                rt2,
+                rn,
+                index: mode,
+                offset,
+            } => {
                 let address = self.address(rn, mode, offset);
                 self.words(index, true, &[rt, rt2], address);
                 self.writeback(rn, mode, offset, address);
             }
-            Op::StorePair { rt, rt2, rn, index: mode, offset } => {
+            Op::StorePair {
+                rt,
+                rt2,
+                rn,
+                index: mode,
+                offset,
+            } => {
                 let address = self.address(rn, mode, offset);
                 self.words(index, false, &[rt, rt2], address);
                 self.writeback(rn, mode, offset, address);
             }
-            Op::LoadMultiple { rn, mask, writeback } | Op::StoreMultiple { rn, mask, writeback } => {
-                let registers: Vec<Reg> = (0..15).filter(|register| mask & 1 << register != 0).collect();
-                self.words(index, matches!(step.op, Op::LoadMultiple { .. }), &registers, rn);
+            Op::LoadMultiple {
+                rn,
+                mask,
+                writeback,
+            }
+            | Op::StoreMultiple {
+                rn,
+                mask,
+                writeback,
+            } => {
+                let registers: Vec<Reg> = (0..15)
+                    .filter(|register| mask & 1 << register != 0)
+                    .collect();
+                self.words(
+                    index,
+                    matches!(step.op, Op::LoadMultiple { .. }),
+                    &registers,
+                    rn,
+                );
                 if writeback {
                     self.asm.add_imm(rn, rn, registers.len() as u32 * 4, T2);
                 }
             }
             Op::Push { mask } => {
-                let registers: Vec<Reg> = (0..15).filter(|register| mask & 1 << register != 0).collect();
+                let registers: Vec<Reg> = (0..15)
+                    .filter(|register| mask & 1 << register != 0)
+                    .collect();
                 a.imm12(a64::SUB_IMM, T0, GUEST_SP, registers.len() as u32 * 4);
                 self.words(index, false, &registers, T0);
                 self.asm.mov(GUEST_SP, T0);
             }
             Op::Pop { mask } => {
                 // The value of the PC goes to T0.
-                let registers: Vec<Reg> =
-                    (0..16).filter(|register| mask & 1 << register != 0).map(|register| if register == PC { T0 } else { register }).collect();
+                let registers: Vec<Reg> = (0..16)
+                    .filter(|register| mask & 1 << register != 0)
+                    .map(|register| if register == PC { T0 } else { register })
+                    .collect();
                 self.words(index, true, &registers, GUEST_SP);
-                self.asm.imm12(a64::ADD_IMM, GUEST_SP, GUEST_SP, registers.len() as u32 * 4);
+                self.asm
+                    .imm12(a64::ADD_IMM, GUEST_SP, GUEST_SP, registers.len() as u32 * 4);
                 if mask & 1 << PC != 0 {
                     self.jump(index);
                 }
@@ -1351,7 +1751,10 @@ impl Compiler<'_> {
                 a.shifted(a64::ADD, T0, T1, T0, a64::LSL, 1);
                 self.jump(index);
             }
-            Op::Branch { offset } => self.jump_to(index, pc.wrapping_add(4).wrapping_add(offset as u32) | thumb),
+            Op::Branch { offset } => self.jump_to(
+                index,
+                pc.wrapping_add(4).wrapping_add(offset as u32) | thumb,
+            ),
             Op::BranchLink { offset } => {
                 a.mov_imm(GUEST_LR, pc.wrapping_add(4) | 1);
                 self.jump_to(index, pc.wrapping_add(4).wrapping_add(offset as u32) | 1);
@@ -1364,7 +1767,11 @@ impl Compiler<'_> {
                 a.mov_imm(GUEST_LR, pc.wrapping_add(4) | 1);
                 self.jump_to(index, (pc.wrapping_add(4) & !3).wrapping_add(offset as u32));
             }
-            Op::CompareBranch { rn, nonzero, offset } => {
+            Op::CompareBranch {
+                rn,
+                nonzero,
+                offset,
+            } => {
                 let next = a.label();
                 if nonzero {
                     a.cbz(rn, next);
@@ -1388,11 +1795,25 @@ impl Compiler<'_> {
                 if register == 2 {
                     self.privileged(index);
                 }
-                let field = [offset_of!(Cp15State, tpidrurw), offset_of!(Cp15State, tpidruro), offset_of!(Cp15State, tpidrprw)];
-                self.asm.add_imm_x(T1, STATE, offset_of!(Armv7Cpu, cp15) + field[usize::from(register)]);
+                let field = [
+                    offset_of!(Cp15State, tpidrurw),
+                    offset_of!(Cp15State, tpidruro),
+                    offset_of!(Cp15State, tpidrprw),
+                ];
+                self.asm.add_imm_x(
+                    T1,
+                    STATE,
+                    offset_of!(Armv7Cpu, cp15) + field[usize::from(register)],
+                );
                 self.asm.mem(a64::LDR, rt, T1, 0);
             }
-            Op::MulHalves { rd, rn, rm, n_high, m_high } => {
+            Op::MulHalves {
+                rd,
+                rn,
+                rm,
+                n_high,
+                m_high,
+            } => {
                 for (target, source, high) in [(T0, rn, n_high), (T1, rm, m_high)] {
                     let (first_bit, last_bit) = if high { (16, 31) } else { (0, 15) };
                     a.bitfield(a64::SBFM, target, source, first_bit, last_bit);
@@ -1420,7 +1841,8 @@ impl Compiler<'_> {
         let steps = &block.steps;
         let live = live_flags(steps, |index| self.always_has_code(index));
         let over_budget = self.asm.label();
-        self.asm.imm12(a64::SUB_IMM | a64::X, BUDGET, BUDGET, steps.len() as u32);
+        self.asm
+            .imm12(a64::SUB_IMM | a64::X, BUDGET, BUDGET, steps.len() as u32);
         self.asm.tbnz(BUDGET, 63, over_budget);
         if (0..steps.len()).any(|index| steps[index].op.is_fp() && self.fp_admitted(index)) {
             // The FP code is for one state of the FP controls.
@@ -1470,11 +1892,15 @@ impl Compiler<'_> {
             let leave = self.leave_at(compiled);
             self.asm.b(leave);
         } else if last.cond != COND_ALWAYS || !always_jumps(last.op) {
-            self.jump_to(compiled - 1, self.page.wrapping_add(block.end_offset.into()) | thumb);
+            self.jump_to(
+                compiled - 1,
+                self.page.wrapping_add(block.end_offset.into()) | thumb,
+            );
         }
         self.asm.bind(over_budget);
         self.give_back(steps.len());
-        self.asm.mov_imm(T0, self.page.wrapping_add(block.offset(0)) | thumb);
+        self.asm
+            .mov_imm(T0, self.page.wrapping_add(block.offset(0)) | thumb);
         self.asm.bind(self.no_jump);
         self.asm.b_to(self.stubs.leave_to_address);
         for access in std::mem::take(&mut self.slow) {
@@ -1567,7 +1993,11 @@ fn stubs(base: usize) -> (Vec<u32>, Stubs) {
     a.add_imm_x(T2, STATE, CPSR);
     a.mem(a64::LDRB, T0, T2, offset_of!(Psr, n));
     a.lsl(T0, T0, 31);
-    for (offset, bit) in [(offset_of!(Psr, z), 30), (offset_of!(Psr, c), 29), (offset_of!(Psr, v), 28)] {
+    for (offset, bit) in [
+        (offset_of!(Psr, z), 30),
+        (offset_of!(Psr, c), 29),
+        (offset_of!(Psr, v), 28),
+    ] {
         a.mem(a64::LDRB, T3, T2, offset);
         a.shifted(a64::ORR, T0, T0, T3, a64::LSL, bit);
     }
@@ -1600,9 +2030,12 @@ fn stubs(base: usize) -> (Vec<u32>, Stubs) {
     a.mem(a64::STR, GUEST_LR, T1, 56);
     a.mrs(T0, a64::NZCV);
     a.add_imm_x(T1, STATE, CPSR);
-    for (offset, bit) in
-        [(offset_of!(Psr, n), 31), (offset_of!(Psr, z), 30), (offset_of!(Psr, c), 29), (offset_of!(Psr, v), 28)]
-    {
+    for (offset, bit) in [
+        (offset_of!(Psr, n), 31),
+        (offset_of!(Psr, z), 30),
+        (offset_of!(Psr, c), 29),
+        (offset_of!(Psr, v), 28),
+    ] {
         a.ubfx(T2, T0, bit, 1);
         a.mem(a64::STRB, T2, T1, offset);
     }
@@ -1663,7 +2096,16 @@ fn stubs(base: usize) -> (Vec<u32>, Stubs) {
     };
     let (call_load, call_store) = (call(false), call(true));
     a.finish();
-    (a.words, Stubs { enter, leave_to_address, leave_at_instruction, call_load, call_store })
+    (
+        a.words,
+        Stubs {
+            enter,
+            leave_to_address,
+            leave_at_instruction,
+            call_load,
+            call_store,
+        },
+    )
 }
 
 impl Jit {
@@ -1687,7 +2129,8 @@ impl Jit {
         let flags = libc::MAP_PRIVATE | libc::MAP_ANON | libc::MAP_JIT;
         let protection = libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC;
         // SAFETY: a new mapping, not at a fixed address.
-        let memory = unsafe { libc::mmap(std::ptr::null_mut(), CODE_SIZE, protection, flags, -1, 0) };
+        let memory =
+            unsafe { libc::mmap(std::ptr::null_mut(), CODE_SIZE, protection, flags, -1, 0) };
         if memory == libc::MAP_FAILED {
             return None;
         }
@@ -1752,7 +2195,11 @@ impl Jit {
         source: impl FnOnce() -> (usize, [u8; PAGE_SIZE as usize]),
     ) -> Option<usize> {
         match block.tier.get() {
-            Tier::Code { entry, page: code_page, generation } if generation == self.generation => {
+            Tier::Code {
+                entry,
+                page: code_page,
+                generation,
+            } if generation == self.generation => {
                 if code_page == page {
                     return Some(entry);
                 }
@@ -1788,7 +2235,9 @@ impl Jit {
             slow: Vec::new(),
         };
         let Some((code, links)) = compiler.compile() else {
-            block.tier.set(Tier::Declined { generation: self.generation });
+            block.tier.set(Tier::Declined {
+                generation: self.generation,
+            });
             return None;
         };
         self.write(&code);
@@ -1797,14 +2246,22 @@ impl Jit {
         let page_code = self.pages.get_mut(&physical).unwrap();
         page_code.entries.insert(key, entry);
         for (target, word) in links {
-            page_code.links.entry(target).or_default().push(entry + word * 4);
+            page_code
+                .links
+                .entry(target)
+                .or_default()
+                .push(entry + word * 4);
         }
         for site in page_code.links.remove(&key).unwrap_or_default() {
             self.link(site, entry);
         }
         self.blocks.push((block.clone(), page));
         self.stats.compiled_blocks += 1;
-        block.tier.set(Tier::Code { entry, page, generation: self.generation });
+        block.tier.set(Tier::Code {
+            entry,
+            page,
+            generation: self.generation,
+        });
         Some(entry)
     }
 
@@ -1814,7 +2271,10 @@ impl Jit {
     #[inline]
     pub fn left_at(&mut self, block: &Block, index: usize) {
         let compilations = block.fp_compilations.get();
-        if block.steps[index].op.is_fp() && block.admitted[index].get() != 0 && compilations < MAX_FP_COMPILATIONS {
+        if block.steps[index].op.is_fp()
+            && block.admitted[index].get() != 0
+            && compilations < MAX_FP_COMPILATIONS
+        {
             block.fp_compilations.set(compilations + 1);
             block.tier.set(Tier::Cold { runs: HOT_RUNS });
         }
@@ -1829,9 +2289,14 @@ impl Jit {
             self.tables.resize_with(space + 1, || None);
         }
         // An address with no code goes to the code that leaves to an address.
-        let empty = Jump { key: 0, code: self.stubs.leave_to_address };
-        let table = self.tables[space]
-            .get_or_insert_with(|| JumpTable { stamp, jumps: vec![empty; 1 << JUMP_BITS].into() });
+        let empty = Jump {
+            key: 0,
+            code: self.stubs.leave_to_address,
+        };
+        let table = self.tables[space].get_or_insert_with(|| JumpTable {
+            stamp,
+            jumps: vec![empty; 1 << JUMP_BITS].into(),
+        });
         if table.stamp != stamp {
             table.stamp = stamp;
             table.jumps.fill(empty);
@@ -1848,7 +2313,10 @@ impl Jit {
     #[inline]
     pub unsafe fn set_jump(&mut self, jumps: *mut Jump, address: u32, code: usize) {
         // SAFETY: the table has 1 << JUMP_BITS entries.
-        unsafe { *jumps.add((address >> 1) as usize & ((1 << JUMP_BITS) - 1)) = Jump { key: address, code } };
+        unsafe {
+            *jumps.add((address >> 1) as usize & ((1 << JUMP_BITS) - 1)) =
+                Jump { key: address, code }
+        };
     }
 
     /// Runs compiled code. Returns the block and the instruction where the code left,
@@ -1865,7 +2333,8 @@ impl Jit {
     pub unsafe fn run(&mut self, context: &mut Context, code: usize) -> Option<(Rc<Block>, usize)> {
         // SAFETY: the stub has this signature, and it keeps the registers that the
         // calling convention of the host gives to the callee.
-        let enter: extern "C" fn(*mut Context, usize) = unsafe { std::mem::transmute(self.stubs.enter) };
+        let enter: extern "C" fn(*mut Context, usize) =
+            unsafe { std::mem::transmute(self.stubs.enter) };
         enter(context, code);
         if context.site.is_null() {
             return None;
@@ -1881,4 +2350,3 @@ impl Jit {
         Some((block, index))
     }
 }
-

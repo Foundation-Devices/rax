@@ -12,14 +12,20 @@ use rax::arm::vfp::{self, Fpscr, VfpState};
 use rax::arm::{Armv7Cpu, DecodedInsn, Decoder, ExecutionState, Mnemonic, Psr};
 
 // With no compiler, the code that makes its entry and exit code has no use.
-#[cfg_attr(not(all(feature = "jit", target_arch = "aarch64", target_os = "macos")), allow(dead_code))]
+#[cfg_attr(
+    not(all(feature = "jit", target_arch = "aarch64", target_os = "macos")),
+    allow(dead_code)
+)]
 mod a64;
 pub mod cache;
-#[cfg_attr(not(all(feature = "jit", target_arch = "aarch64", target_os = "macos")), allow(dead_code))]
+#[cfg_attr(
+    not(all(feature = "jit", target_arch = "aarch64", target_os = "macos")),
+    allow(dead_code)
+)]
 pub mod jit;
-pub mod tlb;
 #[cfg(test)]
 mod tests;
+pub mod tlb;
 
 pub const MAX_INSTRUCTIONS: usize = 64;
 pub const PAGE_SIZE: usize = 4096;
@@ -41,7 +47,12 @@ pub trait Memory {
     /// An access with all its effects. `done` is the number of instructions that the
     /// run completed before the instruction of the access.
     fn load_slow<const N: usize>(&mut self, address: u32, done: usize) -> Result<[u8; N], Fault>;
-    fn store_slow<const N: usize>(&mut self, address: u32, bytes: [u8; N], done: usize) -> Result<(), Fault>;
+    fn store_slow<const N: usize>(
+        &mut self,
+        address: u32,
+        bytes: [u8; N],
+        done: usize,
+    ) -> Result<(), Fault>;
 }
 
 /// Code that runs before each instruction of [`Block::run`].
@@ -227,7 +238,12 @@ impl SimdLane {
     fn has_one_operand(self) -> bool {
         matches!(
             self,
-            SimdLane::Clt0 | SimdLane::Shr | SimdLane::Rshr | SimdLane::Movl | SimdLane::Rshrn | SimdLane::Qmovn
+            SimdLane::Clt0
+                | SimdLane::Shr
+                | SimdLane::Rshr
+                | SimdLane::Movl
+                | SimdLane::Rshrn
+                | SimdLane::Qmovn
         )
     }
 }
@@ -237,113 +253,441 @@ enum Op {
     /// The caller runs the instruction.
     Slow,
     Nop,
-    AluImm { kind: Alu, flags: bool, carry: Carry, rd: u8, rn: u8, imm: u32 },
-    AluReg { kind: Alu, flags: bool, rd: u8, rn: u8, rm: u8, shift: ShiftType, amount: u8 },
-    ShiftReg { shift: ShiftType, flags: bool, rd: u8, rn: u8, rm: u8 },
-    Movt { rd: u8, imm: u16 },
+    AluImm {
+        kind: Alu,
+        flags: bool,
+        carry: Carry,
+        rd: u8,
+        rn: u8,
+        imm: u32,
+    },
+    AluReg {
+        kind: Alu,
+        flags: bool,
+        rd: u8,
+        rn: u8,
+        rm: u8,
+        shift: ShiftType,
+        amount: u8,
+    },
+    ShiftReg {
+        shift: ShiftType,
+        flags: bool,
+        rd: u8,
+        rn: u8,
+        rm: u8,
+    },
+    Movt {
+        rd: u8,
+        imm: u16,
+    },
     /// The base is the PC of the instruction, word aligned, plus 4.
-    Adr { rd: u8, offset: i32 },
+    Adr {
+        rd: u8,
+        offset: i32,
+    },
     /// ADD Rd, PC: the PC of the instruction plus 4.
-    AddPc { rd: u8 },
-    Extend { kind: Extend, rd: u8, rm: u8, rotation: u8 },
-    Clz { rd: u8, rm: u8 },
-    Rbit { rd: u8, rm: u8 },
-    Rev { rd: u8, rm: u8 },
-    Ubfx { rd: u8, rn: u8, lsb: u8, width: u8 },
-    Sbfx { rd: u8, rn: u8, lsb: u8, width: u8 },
-    Bfi { rd: u8, rn: u8, lsb: u8, width: u8 },
-    Bfc { rd: u8, lsb: u8, width: u8 },
-    Mul { flags: bool, rd: u8, rn: u8, rm: u8 },
-    Mla { rd: u8, rn: u8, rm: u8, ra: u8 },
-    Mls { rd: u8, rn: u8, rm: u8, ra: u8 },
-    Umull { lo: u8, hi: u8, rn: u8, rm: u8 },
-    Umlal { lo: u8, hi: u8, rn: u8, rm: u8 },
-    Umaal { lo: u8, hi: u8, rn: u8, rm: u8 },
-    Smull { lo: u8, hi: u8, rn: u8, rm: u8 },
-    Udiv { rd: u8, rn: u8, rm: u8 },
-    Sdiv { rd: u8, rn: u8, rm: u8 },
-    Load { width: Width, rt: u8, rn: u8, index: Index, offset: i32 },
-    LoadReg { width: Width, rt: u8, rn: u8, rm: u8, shift: u8 },
-    LoadLiteral { width: Width, rt: u8, offset: i32 },
-    Store { width: Width, rt: u8, rn: u8, index: Index, offset: i32 },
-    StoreReg { width: Width, rt: u8, rn: u8, rm: u8, shift: u8 },
-    LoadPair { rt: u8, rt2: u8, rn: u8, index: Index, offset: i32 },
-    StorePair { rt: u8, rt2: u8, rn: u8, index: Index, offset: i32 },
+    AddPc {
+        rd: u8,
+    },
+    Extend {
+        kind: Extend,
+        rd: u8,
+        rm: u8,
+        rotation: u8,
+    },
+    Clz {
+        rd: u8,
+        rm: u8,
+    },
+    Rbit {
+        rd: u8,
+        rm: u8,
+    },
+    Rev {
+        rd: u8,
+        rm: u8,
+    },
+    Ubfx {
+        rd: u8,
+        rn: u8,
+        lsb: u8,
+        width: u8,
+    },
+    Sbfx {
+        rd: u8,
+        rn: u8,
+        lsb: u8,
+        width: u8,
+    },
+    Bfi {
+        rd: u8,
+        rn: u8,
+        lsb: u8,
+        width: u8,
+    },
+    Bfc {
+        rd: u8,
+        lsb: u8,
+        width: u8,
+    },
+    Mul {
+        flags: bool,
+        rd: u8,
+        rn: u8,
+        rm: u8,
+    },
+    Mla {
+        rd: u8,
+        rn: u8,
+        rm: u8,
+        ra: u8,
+    },
+    Mls {
+        rd: u8,
+        rn: u8,
+        rm: u8,
+        ra: u8,
+    },
+    Umull {
+        lo: u8,
+        hi: u8,
+        rn: u8,
+        rm: u8,
+    },
+    Umlal {
+        lo: u8,
+        hi: u8,
+        rn: u8,
+        rm: u8,
+    },
+    Umaal {
+        lo: u8,
+        hi: u8,
+        rn: u8,
+        rm: u8,
+    },
+    Smull {
+        lo: u8,
+        hi: u8,
+        rn: u8,
+        rm: u8,
+    },
+    Udiv {
+        rd: u8,
+        rn: u8,
+        rm: u8,
+    },
+    Sdiv {
+        rd: u8,
+        rn: u8,
+        rm: u8,
+    },
+    Load {
+        width: Width,
+        rt: u8,
+        rn: u8,
+        index: Index,
+        offset: i32,
+    },
+    LoadReg {
+        width: Width,
+        rt: u8,
+        rn: u8,
+        rm: u8,
+        shift: u8,
+    },
+    LoadLiteral {
+        width: Width,
+        rt: u8,
+        offset: i32,
+    },
+    Store {
+        width: Width,
+        rt: u8,
+        rn: u8,
+        index: Index,
+        offset: i32,
+    },
+    StoreReg {
+        width: Width,
+        rt: u8,
+        rn: u8,
+        rm: u8,
+        shift: u8,
+    },
+    LoadPair {
+        rt: u8,
+        rt2: u8,
+        rn: u8,
+        index: Index,
+        offset: i32,
+    },
+    StorePair {
+        rt: u8,
+        rt2: u8,
+        rn: u8,
+        index: Index,
+        offset: i32,
+    },
     /// LDMIA and STMIA.
-    LoadMultiple { rn: u8, mask: u16, writeback: bool },
-    StoreMultiple { rn: u8, mask: u16, writeback: bool },
-    Push { mask: u16 },
-    Pop { mask: u16 },
+    LoadMultiple {
+        rn: u8,
+        mask: u16,
+        writeback: bool,
+    },
+    StoreMultiple {
+        rn: u8,
+        mask: u16,
+        writeback: bool,
+    },
+    Push {
+        mask: u16,
+    },
+    Pop {
+        mask: u16,
+    },
     /// The offsets of the branches are from the PC of the instruction plus 4.
-    Branch { offset: i32 },
-    BranchCond { cond: u8, offset: i32 },
-    BranchLink { offset: i32 },
+    Branch {
+        offset: i32,
+    },
+    BranchCond {
+        cond: u8,
+        offset: i32,
+    },
+    BranchLink {
+        offset: i32,
+    },
     /// The A32 BL: the offset is from the PC of the instruction plus 4, as for the others.
-    BranchLinkArm { offset: i32 },
-    CompareBranch { rn: u8, nonzero: bool, offset: u8 },
-    BranchExchange { rm: u8 },
-    BranchLinkExchange { rm: u8 },
-    It { state: u8 },
+    BranchLinkArm {
+        offset: i32,
+    },
+    CompareBranch {
+        rn: u8,
+        nonzero: bool,
+        offset: u8,
+    },
+    BranchExchange {
+        rm: u8,
+    },
+    BranchLinkExchange {
+        rm: u8,
+    },
+    It {
+        state: u8,
+    },
     // The VFP operations. A register number is that of an S register, or of a D
     // register when `double` is set.
-    FpBinary { kind: FpBinary, double: bool, d: u8, n: u8, m: u8 },
-    FpAccumulate { kind: FpAccumulate, double: bool, d: u8, n: u8, m: u8 },
-    FpUnary { kind: FpUnary, double: bool, d: u8, m: u8 },
-    FpCompare { all_nans_signal: bool, with_zero: bool, double: bool, d: u8, m: u8 },
-    FpImmediate { double: bool, d: u8, imm: u8 },
-    FpConvert { kind: FpConvert, d: u8, m: u8 },
-    FpFromCore { s: u8, rt: u8 },
-    FpToCore { rt: u8, s: u8 },
+    FpBinary {
+        kind: FpBinary,
+        double: bool,
+        d: u8,
+        n: u8,
+        m: u8,
+    },
+    FpAccumulate {
+        kind: FpAccumulate,
+        double: bool,
+        d: u8,
+        n: u8,
+        m: u8,
+    },
+    FpUnary {
+        kind: FpUnary,
+        double: bool,
+        d: u8,
+        m: u8,
+    },
+    FpCompare {
+        all_nans_signal: bool,
+        with_zero: bool,
+        double: bool,
+        d: u8,
+        m: u8,
+    },
+    FpImmediate {
+        double: bool,
+        d: u8,
+        imm: u8,
+    },
+    FpConvert {
+        kind: FpConvert,
+        d: u8,
+        m: u8,
+    },
+    FpFromCore {
+        s: u8,
+        rt: u8,
+    },
+    FpToCore {
+        rt: u8,
+        s: u8,
+    },
     /// `v` is a D register, or the first of two S registers.
-    FpFromCorePair { double: bool, v: u8, rt: u8, rt2: u8 },
-    FpToCorePair { double: bool, rt: u8, rt2: u8, v: u8 },
-    FpLoad { double: bool, d: u8, rn: u8, offset: i32 },
+    FpFromCorePair {
+        double: bool,
+        v: u8,
+        rt: u8,
+        rt2: u8,
+    },
+    FpToCorePair {
+        double: bool,
+        rt: u8,
+        rt2: u8,
+        v: u8,
+    },
+    FpLoad {
+        double: bool,
+        d: u8,
+        rn: u8,
+        offset: i32,
+    },
     /// The base is the PC of the instruction, word aligned, plus 4.
-    FpLoadLiteral { double: bool, d: u8, offset: i32 },
-    FpStore { double: bool, d: u8, rn: u8, offset: i32 },
+    FpLoadLiteral {
+        double: bool,
+        d: u8,
+        offset: i32,
+    },
+    FpStore {
+        double: bool,
+        d: u8,
+        rn: u8,
+        offset: i32,
+    },
     /// VMRS APSR_nzcv, FPSCR.
     FpFlags,
     /// `d`, `n` and `m` are D registers: the first of two for a Q register.
-    SimdLogic { kind: SimdLogic, quad: bool, d: u8, n: u8, m: u8 },
+    SimdLogic {
+        kind: SimdLogic,
+        quad: bool,
+        d: u8,
+        n: u8,
+        m: u8,
+    },
     /// `size` is the log2 of the bytes of the smaller element. `quad` is for the
     /// operations with operands and result of the same size.
-    SimdLane { kind: SimdLane, size: u8, quad: bool, unsigned: bool, d: u8, n: u8, m: u8, imm: u8 },
+    SimdLane {
+        kind: SimdLane,
+        size: u8,
+        quad: bool,
+        unsigned: bool,
+        d: u8,
+        n: u8,
+        m: u8,
+        imm: u8,
+    },
     /// VLD1 and VST1 of `count` D registers with no alignment. `rm` is 15 for no
     /// writeback and 13 for a writeback of the size of the transfer.
     /// `align` is the alignment in bytes that the encoding asks for.
-    SimdLoad { d: u8, count: u8, rn: u8, rm: u8, align: u8 },
-    SimdStore { d: u8, count: u8, rn: u8, rm: u8, align: u8 },
+    SimdLoad {
+        d: u8,
+        count: u8,
+        rn: u8,
+        rm: u8,
+        align: u8,
+    },
+    SimdStore {
+        d: u8,
+        count: u8,
+        rn: u8,
+        rm: u8,
+        align: u8,
+    },
     /// A cache or barrier operation of CP15: no effect in a privileged mode.
     CacheOperation,
     /// MRC of TPIDRURW, TPIDRURO or TPIDRPRW (`register` 0 to 2).
-    ThreadRegister { rt: u8, register: u8 },
+    ThreadRegister {
+        rt: u8,
+        register: u8,
+    },
     /// SMULBB, SMULBT, SMULTB and SMULTT: the product of two signed halves.
-    MulHalves { rd: u8, rn: u8, rm: u8, n_high: bool, m_high: bool },
+    MulHalves {
+        rd: u8,
+        rn: u8,
+        rm: u8,
+        n_high: bool,
+        m_high: bool,
+    },
     /// VMOV between a core register and one element of a D register. `offset` is the
     /// place of the element in the register in bytes, `size` the log2 of its bytes.
-    FpElementFromCore { d: u8, offset: u8, size: u8, rt: u8 },
-    FpElementToCore { rt: u8, d: u8, offset: u8, size: u8, signed: bool },
+    FpElementFromCore {
+        d: u8,
+        offset: u8,
+        size: u8,
+        rt: u8,
+    },
+    FpElementToCore {
+        rt: u8,
+        d: u8,
+        offset: u8,
+        size: u8,
+        signed: bool,
+    },
     /// VDUP: an element of all the elements of D or Q. The element is the low bits of
     /// the core register `source`, or is in the D register `source` at `offset`.
-    SimdDuplicate { quad: bool, d: u8, size: u8, from_core: bool, source: u8, offset: u8 },
+    SimdDuplicate {
+        quad: bool,
+        d: u8,
+        size: u8,
+        from_core: bool,
+        source: u8,
+        offset: u8,
+    },
     /// VLD3, VST3, VLD4 and VST4 of all the elements of 3 or 4 D registers, `spacing`
     /// apart. `size` is the log2 of the bytes of an element; `rm` and `align` are those
     /// of SimdLoad.
-    SimdStructure { load: bool, d: u8, registers: u8, spacing: u8, size: u8, rn: u8, rm: u8, align: u8 },
+    SimdStructure {
+        load: bool,
+        d: u8,
+        registers: u8,
+        spacing: u8,
+        size: u8,
+        rn: u8,
+        rm: u8,
+        align: u8,
+    },
     /// VCEQ, VCGE and VCGT of single-precision elements. The fast operation is for
     /// operands with no NaN and no denormal number: these have exceptions and the
     /// flush to zero of the standard FPSCR value.
-    SimdFloatCompare { kind: SimdLane, quad: bool, d: u8, n: u8, m: u8 },
+    SimdFloatCompare {
+        kind: SimdLane,
+        quad: bool,
+        d: u8,
+        n: u8,
+        m: u8,
+    },
     /// VMOV of an immediate: the value is at `constant` in the constants of the block.
-    SimdImmediate { quad: bool, d: u8, constant: u16 },
+    SimdImmediate {
+        quad: bool,
+        d: u8,
+        constant: u16,
+    },
     /// VLDM, VSTM, VPUSH and VPOP of `count` D registers. `decrement` is the form that
     /// goes down from the base before the access; it always has a writeback.
-    FpLoadMultiple { d: u8, count: u8, rn: u8, decrement: bool, writeback: bool },
-    FpStoreMultiple { d: u8, count: u8, rn: u8, decrement: bool, writeback: bool },
+    FpLoadMultiple {
+        d: u8,
+        count: u8,
+        rn: u8,
+        decrement: bool,
+        writeback: bool,
+    },
+    FpStoreMultiple {
+        d: u8,
+        count: u8,
+        rn: u8,
+        decrement: bool,
+        writeback: bool,
+    },
     /// TBB and TBH. `rn` is 15 for a table after the instruction.
-    TableBranch { rn: u8, rm: u8, halfword: bool },
+    TableBranch {
+        rn: u8,
+        rm: u8,
+        halfword: bool,
+    },
     /// BLX to A32 code: the offset is from the PC of the instruction plus 4, word aligned.
-    BranchLinkToArm { offset: i32 },
+    BranchLinkToArm {
+        offset: i32,
+    },
 }
 
 impl Op {
@@ -442,7 +786,9 @@ fn any_pc(registers: &[u8]) -> bool {
 
 /// True when a register is the SP or the PC: most T32 encodings have no defined result then.
 fn any_sp_or_pc(registers: &[u8]) -> bool {
-    registers.iter().any(|&register| register == SP || register == PC)
+    registers
+        .iter()
+        .any(|&register| register == SP || register == PC)
 }
 
 /// The data-processing operations that take the SP as an operand or as the result.
@@ -451,11 +797,26 @@ fn sp_is_valid(kind: Alu) -> bool {
 }
 
 fn alu_reg(kind: Alu, flags: bool, rd: u8, rn: u8, rm: u8) -> Op {
-    Op::AluReg { kind, flags, rd, rn, rm, shift: ShiftType::LSL, amount: 0 }
+    Op::AluReg {
+        kind,
+        flags,
+        rd,
+        rn,
+        rm,
+        shift: ShiftType::LSL,
+        amount: 0,
+    }
 }
 
 fn alu_imm(kind: Alu, flags: bool, rd: u8, rn: u8, imm: u32) -> Op {
-    Op::AluImm { kind, flags, carry: Carry::Keep, rd, rn, imm }
+    Op::AluImm {
+        kind,
+        flags,
+        carry: Carry::Keep,
+        rd,
+        rn,
+        imm,
+    }
 }
 
 fn thumb16(hw: u32, in_it: bool) -> Op {
@@ -466,7 +827,15 @@ fn thumb16(hw: u32, in_it: bool) -> Op {
     match hw >> 11 {
         0b00000..=0b00010 => {
             let (shift, amount) = decode_imm_shift((hw >> 11) as u8, imm5 as u8);
-            Op::AluReg { kind: Alu::Mov, flags, rd: low(0), rn: 0, rm: low(3), shift, amount }
+            Op::AluReg {
+                kind: Alu::Mov,
+                flags,
+                rd: low(0),
+                rn: 0,
+                rm: low(3),
+                shift,
+                amount,
+            }
         }
         0b00011 => {
             let kind = if hw & 0x200 != 0 { Alu::Sub } else { Alu::Add };
@@ -482,7 +851,13 @@ fn thumb16(hw: u32, in_it: bool) -> Op {
         0b00111 => alu_imm(Alu::Sub, flags, low(8), low(8), imm8),
         0b01000 if hw & 0x400 == 0 => {
             let (rdn, rm) = (low(0), low(3));
-            let shift_reg = |shift| Op::ShiftReg { shift, flags, rd: rdn, rn: rdn, rm };
+            let shift_reg = |shift| Op::ShiftReg {
+                shift,
+                flags,
+                rd: rdn,
+                rn: rdn,
+                rm,
+            };
             match bits(hw, 6, 4) {
                 0 => alu_reg(Alu::And, flags, rdn, rdn, rm),
                 1 => alu_reg(Alu::Eor, flags, rdn, rdn, rm),
@@ -497,7 +872,12 @@ fn thumb16(hw: u32, in_it: bool) -> Op {
                 10 => alu_reg(Alu::Cmp, true, 0, rdn, rm),
                 11 => alu_reg(Alu::Cmn, true, 0, rdn, rm),
                 12 => alu_reg(Alu::Orr, flags, rdn, rdn, rm),
-                13 => Op::Mul { flags, rd: rdn, rn: rm, rm: rdn },
+                13 => Op::Mul {
+                    flags,
+                    rd: rdn,
+                    rn: rm,
+                    rm: rdn,
+                },
                 14 => alu_reg(Alu::Bic, flags, rdn, rdn, rm),
                 _ => alu_reg(Alu::Mvn, flags, rdn, 0, rm),
             }
@@ -516,11 +896,27 @@ fn thumb16(hw: u32, in_it: bool) -> Op {
                 _ => alu_reg(Alu::Mov, false, rdn, 0, rm),
             }
         }
-        0b01001 => Op::LoadLiteral { width: Width::Word, rt: low(8), offset: (imm8 * 4) as i32 },
+        0b01001 => Op::LoadLiteral {
+            width: Width::Word,
+            rt: low(8),
+            offset: (imm8 * 4) as i32,
+        },
         0b01010 | 0b01011 => {
             let (rt, rn, rm) = (low(0), low(3), low(6));
-            let load = |width| Op::LoadReg { width, rt, rn, rm, shift: 0 };
-            let store = |width| Op::StoreReg { width, rt, rn, rm, shift: 0 };
+            let load = |width| Op::LoadReg {
+                width,
+                rt,
+                rn,
+                rm,
+                shift: 0,
+            };
+            let store = |width| Op::StoreReg {
+                width,
+                rt,
+                rn,
+                rm,
+                shift: 0,
+            };
             match bits(hw, 9, 3) {
                 0 => store(Width::Word),
                 1 => store(Width::Half),
@@ -540,18 +936,41 @@ fn thumb16(hw: u32, in_it: bool) -> Op {
             };
             let (rt, rn, offset) = (low(0), low(3), (imm5 * scale) as i32);
             if hw & 0x800 != 0 {
-                Op::Load { width, rt, rn, index: Index::Offset, offset }
+                Op::Load {
+                    width,
+                    rt,
+                    rn,
+                    index: Index::Offset,
+                    offset,
+                }
             } else {
-                Op::Store { width, rt, rn, index: Index::Offset, offset }
+                Op::Store {
+                    width,
+                    rt,
+                    rn,
+                    index: Index::Offset,
+                    offset,
+                }
             }
         }
-        0b10010 => {
-            Op::Store { width: Width::Word, rt: low(8), rn: 13, index: Index::Offset, offset: (imm8 * 4) as i32 }
-        }
-        0b10011 => {
-            Op::Load { width: Width::Word, rt: low(8), rn: 13, index: Index::Offset, offset: (imm8 * 4) as i32 }
-        }
-        0b10100 => Op::Adr { rd: low(8), offset: (imm8 * 4) as i32 },
+        0b10010 => Op::Store {
+            width: Width::Word,
+            rt: low(8),
+            rn: 13,
+            index: Index::Offset,
+            offset: (imm8 * 4) as i32,
+        },
+        0b10011 => Op::Load {
+            width: Width::Word,
+            rt: low(8),
+            rn: 13,
+            index: Index::Offset,
+            offset: (imm8 * 4) as i32,
+        },
+        0b10100 => Op::Adr {
+            rd: low(8),
+            offset: (imm8 * 4) as i32,
+        },
         0b10101 => alu_imm(Alu::Add, false, low(8), 13, imm8 * 4),
         0b10110 | 0b10111 => match bits(hw, 8, 4) {
             0 => {
@@ -570,21 +989,36 @@ fn thumb16(hw: u32, in_it: bool) -> Op {
                     2 => Extend::Uxth,
                     _ => Extend::Uxtb,
                 };
-                Op::Extend { kind, rd: low(0), rm: low(3), rotation: 0 }
+                Op::Extend {
+                    kind,
+                    rd: low(0),
+                    rm: low(3),
+                    rotation: 0,
+                }
             }
-            4 | 5 if hw & 0x1ff != 0 => Op::Push { mask: (imm8 | bits(hw, 8, 1) << 14) as u16 },
-            12 | 13 if hw & 0x1ff != 0 => Op::Pop { mask: (imm8 | bits(hw, 8, 1) << 15) as u16 },
-            10 if bits(hw, 6, 2) == 0 => Op::Rev { rd: low(0), rm: low(3) },
+            4 | 5 if hw & 0x1ff != 0 => Op::Push {
+                mask: (imm8 | bits(hw, 8, 1) << 14) as u16,
+            },
+            12 | 13 if hw & 0x1ff != 0 => Op::Pop {
+                mask: (imm8 | bits(hw, 8, 1) << 15) as u16,
+            },
+            10 if bits(hw, 6, 2) == 0 => Op::Rev {
+                rd: low(0),
+                rm: low(3),
+            },
             15 if hw & 0xf != 0 => Op::It { state: imm8 as u8 },
             15 if imm8 == 0 => Op::Nop,
             _ => Op::Slow,
         },
         0b11000 => multiple(false, low(8), imm8 as u16, true),
         0b11001 => multiple(true, low(8), imm8 as u16, true),
-        0b11010 | 0b11011 if bits(hw, 8, 4) < 14 => {
-            Op::BranchCond { cond: reg(hw, 8), offset: sign_extend(imm8, 8) * 2 }
-        }
-        0b11100 => Op::Branch { offset: sign_extend(hw & 0x7ff, 11) * 2 },
+        0b11010 | 0b11011 if bits(hw, 8, 4) < 14 => Op::BranchCond {
+            cond: reg(hw, 8),
+            offset: sign_extend(imm8, 8) * 2,
+        },
+        0b11100 => Op::Branch {
+            offset: sign_extend(hw & 0x7ff, 11) * 2,
+        },
         _ => Op::Slow,
     }
 }
@@ -596,11 +1030,19 @@ fn multiple(load: bool, rn: u8, mask: u16, writeback: bool) -> Op {
     }
     if load {
         // The loaded value of the base register stays.
-        Op::LoadMultiple { rn, mask, writeback: writeback && mask & 1 << rn == 0 }
+        Op::LoadMultiple {
+            rn,
+            mask,
+            writeback: writeback && mask & 1 << rn == 0,
+        }
     } else if writeback && mask & 1 << rn != 0 {
         Op::Slow
     } else {
-        Op::StoreMultiple { rn, mask, writeback }
+        Op::StoreMultiple {
+            rn,
+            mask,
+            writeback,
+        }
     }
 }
 
@@ -610,7 +1052,11 @@ const ARM_PC_OFFSET: i32 = 4;
 
 /// The index mode and the offset of the A32 loads and stores, from the P, U and W bits.
 fn arm_index(raw: u32, imm: u32) -> Option<(Index, i32)> {
-    let offset = if raw & 0x0080_0000 != 0 { imm as i32 } else { -(imm as i32) };
+    let offset = if raw & 0x0080_0000 != 0 {
+        imm as i32
+    } else {
+        -(imm as i32)
+    };
     match (raw & 0x0100_0000 != 0, raw & 0x0020_0000 != 0) {
         (true, false) => Some((Index::Offset, offset)),
         (true, true) => Some((Index::Pre, offset)),
@@ -630,7 +1076,10 @@ fn arm_data_processing(raw: u32) -> Op {
         return match opcode {
             _ if !immediate || rd == PC => Op::Slow,
             8 => alu_imm(Alu::Mov, false, rd, 0, imm16),
-            10 => Op::Movt { rd, imm: imm16 as u16 },
+            10 => Op::Movt {
+                rd,
+                imm: imm16 as u16,
+            },
             _ => Op::Slow,
         };
     }
@@ -660,8 +1109,14 @@ fn arm_data_processing(raw: u32) -> Op {
         let imm = (raw & 0xff).rotate_right(rotation);
         if rn == PC && kind.has_first_operand() {
             return match kind {
-                Alu::Add if !flags => Op::Adr { rd, offset: imm as i32 + ARM_PC_OFFSET },
-                Alu::Sub if !flags => Op::Adr { rd, offset: ARM_PC_OFFSET - imm as i32 },
+                Alu::Add if !flags => Op::Adr {
+                    rd,
+                    offset: imm as i32 + ARM_PC_OFFSET,
+                },
+                Alu::Sub if !flags => Op::Adr {
+                    rd,
+                    offset: ARM_PC_OFFSET - imm as i32,
+                },
                 _ => Op::Slow,
             };
         }
@@ -670,14 +1125,29 @@ fn arm_data_processing(raw: u32) -> Op {
             (_, 0) => Carry::Clear,
             _ => Carry::Set,
         };
-        return Op::AluImm { kind, flags, carry, rd, rn, imm };
+        return Op::AluImm {
+            kind,
+            flags,
+            carry,
+            rd,
+            rn,
+            imm,
+        };
     }
     // Bit 4 selects a shift by a register, or a multiply or an extra load with bit 7.
     if raw & 0x10 != 0 || rm == PC || (rn == PC && kind.has_first_operand()) {
         return Op::Slow;
     }
     let (shift, amount) = decode_imm_shift(bits(raw, 5, 2) as u8, bits(raw, 7, 5) as u8);
-    Op::AluReg { kind, flags, rd, rn, rm, shift, amount }
+    Op::AluReg {
+        kind,
+        flags,
+        rd,
+        rn,
+        rm,
+        shift,
+        amount,
+    }
 }
 
 fn arm(raw: u32) -> Op {
@@ -686,15 +1156,37 @@ fn arm(raw: u32) -> Op {
     }
     let (rn, rt, rm) = (reg(raw, 16), reg(raw, 12), reg(raw, 0));
     let load = raw & 0x0010_0000 != 0;
-    let (p, u, w) = (raw & 0x0100_0000 != 0, raw & 0x0080_0000 != 0, raw & 0x0020_0000 != 0);
+    let (p, u, w) = (
+        raw & 0x0100_0000 != 0,
+        raw & 0x0080_0000 != 0,
+        raw & 0x0020_0000 != 0,
+    );
     match bits(raw, 25, 3) {
         0b000 if raw & 0x0ff0_00f0 == 0x0000_0090 => {
             let (rd, rs) = (rn, reg(raw, 8));
-            if any_pc(&[rd, rm, rs]) { Op::Slow } else { Op::Mul { flags: false, rd, rn: rm, rm: rs } }
+            if any_pc(&[rd, rm, rs]) {
+                Op::Slow
+            } else {
+                Op::Mul {
+                    flags: false,
+                    rd,
+                    rn: rm,
+                    rm: rs,
+                }
+            }
         }
         0b000 if raw & 0x0ff0_00f0 == 0x0020_0090 => {
             let (rd, ra, rs) = (rn, rt, reg(raw, 8));
-            if any_pc(&[rd, ra, rm, rs]) { Op::Slow } else { Op::Mla { rd, rn: rm, rm: rs, ra } }
+            if any_pc(&[rd, ra, rm, rs]) {
+                Op::Slow
+            } else {
+                Op::Mla {
+                    rd,
+                    rn: rm,
+                    rm: rs,
+                    ra,
+                }
+            }
         }
         0b000 if raw & 0x0f10_00f0 == 0x0000_0090 => {
             let (hi, lo, rs) = (rn, rt, reg(raw, 8));
@@ -702,10 +1194,30 @@ fn arm(raw: u32) -> Op {
                 return Op::Slow;
             }
             match bits(raw, 21, 3) {
-                0b010 => Op::Umaal { lo, hi, rn: rm, rm: rs },
-                0b100 => Op::Umull { lo, hi, rn: rm, rm: rs },
-                0b101 => Op::Umlal { lo, hi, rn: rm, rm: rs },
-                0b110 => Op::Smull { lo, hi, rn: rm, rm: rs },
+                0b010 => Op::Umaal {
+                    lo,
+                    hi,
+                    rn: rm,
+                    rm: rs,
+                },
+                0b100 => Op::Umull {
+                    lo,
+                    hi,
+                    rn: rm,
+                    rm: rs,
+                },
+                0b101 => Op::Umlal {
+                    lo,
+                    hi,
+                    rn: rm,
+                    rm: rs,
+                },
+                0b110 => Op::Smull {
+                    lo,
+                    hi,
+                    rn: rm,
+                    rm: rs,
+                },
                 _ => Op::Slow,
             }
         }
@@ -719,7 +1231,12 @@ fn arm(raw: u32) -> Op {
                 0b111 => Extend::Uxth,
                 _ => return Op::Slow,
             };
-            Op::Extend { kind, rd: rt, rm, rotation: (bits(raw, 10, 2) * 8) as u8 }
+            Op::Extend {
+                kind,
+                rd: rt,
+                rm,
+                rotation: (bits(raw, 10, 2) * 8) as u8,
+            }
         }
         0b000 if raw & 0x0040_0090 == 0x0040_0090 => {
             // The halfword and signed loads and stores with an immediate offset.
@@ -739,7 +1256,11 @@ fn arm(raw: u32) -> Op {
         }
         0b000 | 0b001 if raw & 0x0e00_0090 != 0x0000_0090 => arm_data_processing(raw),
         0b010 => {
-            let width = if raw & 0x0040_0000 != 0 { Width::Byte } else { Width::Word };
+            let width = if raw & 0x0040_0000 != 0 {
+                Width::Byte
+            } else {
+                Width::Word
+            };
             let Some((index, offset)) = arm_index(raw, raw & 0xfff) else {
                 return Op::Slow;
             };
@@ -748,23 +1269,58 @@ fn arm(raw: u32) -> Op {
             } else if rn != PC {
                 thumb32_single(load, width, rt, rn, index, offset)
             } else if load && index == Index::Offset {
-                Op::LoadLiteral { width, rt, offset: offset + ARM_PC_OFFSET }
+                Op::LoadLiteral {
+                    width,
+                    rt,
+                    offset: offset + ARM_PC_OFFSET,
+                }
             } else {
                 Op::Slow
             }
         }
-        0b011 if raw & 0x10 == 0 && p && u && !w && bits(raw, 5, 2) == 0 && !any_pc(&[rn, rt, rm]) => {
-            let width = if raw & 0x0040_0000 != 0 { Width::Byte } else { Width::Word };
+        0b011
+            if raw & 0x10 == 0
+                && p
+                && u
+                && !w
+                && bits(raw, 5, 2) == 0
+                && !any_pc(&[rn, rt, rm]) =>
+        {
+            let width = if raw & 0x0040_0000 != 0 {
+                Width::Byte
+            } else {
+                Width::Word
+            };
             let shift = bits(raw, 7, 5) as u8;
-            if load { Op::LoadReg { width, rt, rn, rm, shift } } else { Op::StoreReg { width, rt, rn, rm, shift } }
+            if load {
+                Op::LoadReg {
+                    width,
+                    rt,
+                    rn,
+                    rm,
+                    shift,
+                }
+            } else {
+                Op::StoreReg {
+                    width,
+                    rt,
+                    rn,
+                    rm,
+                    shift,
+                }
+            }
         }
         0b100 if raw & 0x0040_0000 == 0 => {
             let mask = raw as u16;
             match (p, u, load) {
-                (true, false, false) if rn == SP && w && mask.count_ones() >= 2 && mask >> 13 & 0b101 == 0 => {
+                (true, false, false)
+                    if rn == SP && w && mask.count_ones() >= 2 && mask >> 13 & 0b101 == 0 =>
+                {
                     Op::Push { mask }
                 }
-                (false, true, true) if rn == SP && w && mask.count_ones() >= 2 && mask & 1 << SP == 0 => {
+                (false, true, true)
+                    if rn == SP && w && mask.count_ones() >= 2 && mask & 1 << SP == 0 =>
+                {
                     Op::Pop { mask }
                 }
                 (false, true, _) => multiple(load, rn, mask, w),
@@ -773,7 +1329,11 @@ fn arm(raw: u32) -> Op {
         }
         0b101 => {
             let offset = sign_extend(raw & 0x00ff_ffff, 24) * 4 + ARM_PC_OFFSET;
-            if raw & 0x0100_0000 != 0 { Op::BranchLinkArm { offset } } else { Op::Branch { offset } }
+            if raw & 0x0100_0000 != 0 {
+                Op::BranchLinkArm { offset }
+            } else {
+                Op::Branch { offset }
+            }
         }
         _ => Op::Slow,
     }
@@ -784,7 +1344,11 @@ fn thumb_expand_imm(imm12: u32) -> Option<(u32, Carry)> {
     let imm8 = imm12 & 0xff;
     if imm12 >> 10 != 0 {
         let value = (0x80 | imm8 & 0x7f).rotate_right(imm12 >> 7);
-        let carry = if value >> 31 != 0 { Carry::Set } else { Carry::Clear };
+        let carry = if value >> 31 != 0 {
+            Carry::Set
+        } else {
+            Carry::Clear
+        };
         return Some((value, carry));
     }
     let value = match imm12 >> 8 {
@@ -826,9 +1390,21 @@ fn thumb32_single(load: bool, width: Width, rt: u8, rn: u8, index: Index, offset
         return Op::Slow;
     }
     if load {
-        Op::Load { width, rt, rn, index, offset }
+        Op::Load {
+            width,
+            rt,
+            rn,
+            index,
+            offset,
+        }
     } else {
-        Op::Store { width, rt, rn, index, offset }
+        Op::Store {
+            width,
+            rt,
+            rn,
+            index,
+            offset,
+        }
     }
 }
 
@@ -867,7 +1443,14 @@ fn thumb32(raw: u32) -> Op {
             if !sp_is_valid(kind) && (rd == SP || rn == SP) {
                 return Op::Slow;
             }
-            return Op::AluImm { kind, flags, carry, rd, rn, imm };
+            return Op::AluImm {
+                kind,
+                flags,
+                carry,
+                rd,
+                rn,
+                imm,
+            };
         }
         let add_or_sub = matches!(bits(hw1, 4, 5), 0b00000 | 0b01010);
         if rd == PC || (!add_or_sub && (rd == SP || rn == SP)) {
@@ -876,17 +1459,45 @@ fn thumb32(raw: u32) -> Op {
         let lsb = (bits(hw2, 12, 3) << 2 | bits(hw2, 6, 2)) as u8;
         let low5 = (hw2 & 0x1f) as u8;
         return match bits(hw1, 4, 5) {
-            0b00000 if rn == PC => Op::Adr { rd, offset: imm12 as i32 },
+            0b00000 if rn == PC => Op::Adr {
+                rd,
+                offset: imm12 as i32,
+            },
             0b00000 => alu_imm(Alu::Add, false, rd, rn, imm12),
             0b00100 => alu_imm(Alu::Mov, false, rd, 0, u32::from(rn) << 12 | imm12),
-            0b01010 if rn == PC => Op::Adr { rd, offset: -(imm12 as i32) },
+            0b01010 if rn == PC => Op::Adr {
+                rd,
+                offset: -(imm12 as i32),
+            },
             0b01010 => alu_imm(Alu::Sub, false, rd, rn, imm12),
-            0b01100 => Op::Movt { rd, imm: (u32::from(rn) << 12 | imm12) as u16 },
-            0b10100 if rn != PC && lsb + low5 < 32 => Op::Sbfx { rd, rn, lsb, width: low5 + 1 },
-            0b11100 if rn != PC && lsb + low5 < 32 => Op::Ubfx { rd, rn, lsb, width: low5 + 1 },
+            0b01100 => Op::Movt {
+                rd,
+                imm: (u32::from(rn) << 12 | imm12) as u16,
+            },
+            0b10100 if rn != PC && lsb + low5 < 32 => Op::Sbfx {
+                rd,
+                rn,
+                lsb,
+                width: low5 + 1,
+            },
+            0b11100 if rn != PC && lsb + low5 < 32 => Op::Ubfx {
+                rd,
+                rn,
+                lsb,
+                width: low5 + 1,
+            },
             0b10110 if low5 < lsb => Op::Slow,
-            0b10110 if rn == PC => Op::Bfc { rd, lsb, width: low5 - lsb + 1 },
-            0b10110 => Op::Bfi { rd, rn, lsb, width: low5 - lsb + 1 },
+            0b10110 if rn == PC => Op::Bfc {
+                rd,
+                lsb,
+                width: low5 - lsb + 1,
+            },
+            0b10110 => Op::Bfi {
+                rd,
+                rn,
+                lsb,
+                width: low5 - lsb + 1,
+            },
             _ => Op::Slow,
         };
     }
@@ -896,12 +1507,18 @@ fn thumb32(raw: u32) -> Op {
         let imm11 = hw2 & 0x7ff;
         let far = || {
             let (i1, i2) = (!(j1 ^ s) & 1, !(j2 ^ s) & 1);
-            sign_extend(s << 24 | i1 << 23 | i2 << 22 | bits(hw1, 0, 10) << 12 | imm11 << 1, 25)
+            sign_extend(
+                s << 24 | i1 << 23 | i2 << 22 | bits(hw1, 0, 10) << 12 | imm11 << 1,
+                25,
+            )
         };
         return match (hw2 & 0x4000 != 0, hw2 & 0x1000 != 0) {
             (false, false) if bits(hw1, 6, 4) < 14 => {
                 let imm = s << 20 | j2 << 19 | j1 << 18 | bits(hw1, 0, 6) << 12 | imm11 << 1;
-                Op::BranchCond { cond: reg(hw1, 6), offset: sign_extend(imm, 21) }
+                Op::BranchCond {
+                    cond: reg(hw1, 6),
+                    offset: sign_extend(imm, 21),
+                }
             }
             (false, true) => Op::Branch { offset: far() },
             (true, true) => Op::BranchLink { offset: far() },
@@ -920,7 +1537,11 @@ fn thumb32(raw: u32) -> Op {
         if rn != 13 {
             // LDMIA and STMIA. A base register in the list has no defined result with a writeback.
             let defined = bits(hw1, 7, 2) == 0b01 && !(wback && mask & 1 << rn != 0);
-            return if defined { multiple(load, rn, mask, wback) } else { Op::Slow };
+            return if defined {
+                multiple(load, rn, mask, wback)
+            } else {
+                Op::Slow
+            };
         }
         if !wback {
             return Op::Slow;
@@ -939,7 +1560,11 @@ fn thumb32(raw: u32) -> Op {
             return if any_sp_or_pc(&[rm]) || rn == SP {
                 Op::Slow
             } else {
-                Op::TableBranch { rn, rm, halfword: hw2 & 0x10 != 0 }
+                Op::TableBranch {
+                    rn,
+                    rm,
+                    halfword: hw2 & 0x10 != 0,
+                }
             };
         }
         let Some((index, offset)) = thumb32_index(p, u, w, (hw2 & 0xff) * 4) else {
@@ -953,9 +1578,21 @@ fn thumb32(raw: u32) -> Op {
             return Op::Slow;
         }
         return if load {
-            Op::LoadPair { rt, rt2, rn, index, offset }
+            Op::LoadPair {
+                rt,
+                rt2,
+                rn,
+                index,
+                offset,
+            }
         } else {
-            Op::StorePair { rt, rt2, rn, index, offset }
+            Op::StorePair {
+                rt,
+                rt2,
+                rn,
+                index,
+                offset,
+            }
         };
     }
 
@@ -974,7 +1611,15 @@ fn thumb32(raw: u32) -> Op {
         }
         let imm5 = bits(hw2, 12, 3) << 2 | bits(hw2, 6, 2);
         let (shift, amount) = decode_imm_shift(bits(hw2, 4, 2) as u8, imm5 as u8);
-        return Op::AluReg { kind, flags, rd, rn, rm, shift, amount };
+        return Op::AluReg {
+            kind,
+            flags,
+            rd,
+            rn,
+            rm,
+            shift,
+            amount,
+        };
     }
 
     if hw1 >> 9 == 0b1111100 && !(hw1 & 0x100 != 0 && hw1 & 0x10 == 0) {
@@ -997,7 +1642,11 @@ fn thumb32(raw: u32) -> Op {
                 return Op::Slow;
             }
             let imm = (hw2 & 0xfff) as i32;
-            return Op::LoadLiteral { width, rt, offset: if positive { imm } else { -imm } };
+            return Op::LoadLiteral {
+                width,
+                rt,
+                offset: if positive { imm } else { -imm },
+            };
         }
         if positive {
             return thumb32_single(load, width, rt, rn, Index::Offset, (hw2 & 0xfff) as i32);
@@ -1018,9 +1667,21 @@ fn thumb32(raw: u32) -> Op {
         }
         let shift = bits(hw2, 4, 2) as u8;
         return if load {
-            Op::LoadReg { width, rt, rn, rm, shift }
+            Op::LoadReg {
+                width,
+                rt,
+                rn,
+                rm,
+                shift,
+            }
         } else {
-            Op::StoreReg { width, rt, rn, rm, shift }
+            Op::StoreReg {
+                width,
+                rt,
+                rn,
+                rm,
+                shift,
+            }
         };
     }
 
@@ -1031,7 +1692,13 @@ fn thumb32(raw: u32) -> Op {
         if hw1 & 0x80 == 0 {
             if hw2 & 0xf0 == 0 && !any_sp_or_pc(&[rn]) {
                 let shift = ShiftType::from_bits(bits(hw1, 5, 2) as u8);
-                return Op::ShiftReg { shift, flags, rd, rn, rm };
+                return Op::ShiftReg {
+                    shift,
+                    flags,
+                    rd,
+                    rn,
+                    rm,
+                };
             }
             if hw2 & 0xc0 != 0x80 || rn != PC {
                 return Op::Slow;
@@ -1043,7 +1710,12 @@ fn thumb32(raw: u32) -> Op {
                 5 => Extend::Uxtb,
                 _ => return Op::Slow,
             };
-            return Op::Extend { kind, rd, rm, rotation: (bits(hw2, 4, 2) * 8) as u8 };
+            return Op::Extend {
+                kind,
+                rd,
+                rm,
+                rotation: (bits(hw2, 4, 2) * 8) as u8,
+            };
         }
         if hw1 & 0x40 != 0 || bits(hw2, 6, 2) != 0b10 || rn != rm {
             return Op::Slow;
@@ -1062,12 +1734,21 @@ fn thumb32(raw: u32) -> Op {
             return Op::Slow;
         }
         return match (bits(hw1, 4, 3), bits(hw2, 4, 4)) {
-            (0, 0) if ra == PC => Op::Mul { flags: false, rd, rn, rm },
+            (0, 0) if ra == PC => Op::Mul {
+                flags: false,
+                rd,
+                rn,
+                rm,
+            },
             (0, 0) => Op::Mla { rd, rn, rm, ra },
             (0, 1) if ra != PC => Op::Mls { rd, rn, rm, ra },
-            (1, halves @ 0..=3) if ra == PC => {
-                Op::MulHalves { rd, rn, rm, n_high: halves & 2 != 0, m_high: halves & 1 != 0 }
-            }
+            (1, halves @ 0..=3) if ra == PC => Op::MulHalves {
+                rd,
+                rn,
+                rm,
+                n_high: halves & 2 != 0,
+                m_high: halves & 1 != 0,
+            },
             _ => Op::Slow,
         };
     }
@@ -1092,7 +1773,12 @@ fn thumb32(raw: u32) -> Op {
 /// MCR and MRC of CP15 with a fast operation. The low 28 bits of the T32 encoding are
 /// those of the A32 one.
 fn system(raw: u32) -> Op {
-    let (crn, rt, opc2, crm) = (bits(raw, 16, 4), reg(raw, 12), bits(raw, 5, 3), bits(raw, 0, 4));
+    let (crn, rt, opc2, crm) = (
+        bits(raw, 16, 4),
+        reg(raw, 12),
+        bits(raw, 5, 3),
+        bits(raw, 0, 4),
+    );
     if raw & 0x0fe0_0f10 != 0x0e00_0f10 || rt >= SP {
         return Op::Slow;
     }
@@ -1103,7 +1789,10 @@ fn system(raw: u32) -> Op {
         | (false, 7, 10, 1 | 2 | 4 | 5)
         | (false, 7, 11, 1)
         | (false, 7, 14, 1 | 2) => Op::CacheOperation,
-        (true, 13, 0, 2..=4) => Op::ThreadRegister { rt, register: (opc2 - 2) as u8 },
+        (true, 13, 0, 2..=4) => Op::ThreadRegister {
+            rt,
+            register: (opc2 - 2) as u8,
+        },
         _ => Op::Slow,
     }
 }
@@ -1132,7 +1821,10 @@ fn thumb_simd_memory(insn: &DecodedInsn) -> Op {
         let load = raw & 0x20_0000 != 0;
         let known = matches!(
             (insn.mnemonic, load, registers),
-            (Mnemonic::VLD4, true, 4) | (Mnemonic::VST4, false, 4) | (Mnemonic::VLD3, true, 3) | (Mnemonic::VST3, false, 3)
+            (Mnemonic::VLD4, true, 4)
+                | (Mnemonic::VST4, false, 4)
+                | (Mnemonic::VLD3, true, 3)
+                | (Mnemonic::VST3, false, 3)
         );
         // The alignments of 128 and 256 bits are only for 4 registers.
         let align = match (bits(raw, 4, 2), registers) {
@@ -1141,9 +1833,21 @@ fn thumb_simd_memory(insn: &DecodedInsn) -> Op {
             (field, 4) => 4 << field,
             _ => return Op::Slow,
         };
-        let defined = raw & 0xff90_0000 == 0xf900_0000 && known && size != 3 && d + (registers - 1) * spacing <= 31;
+        let defined = raw & 0xff90_0000 == 0xf900_0000
+            && known
+            && size != 3
+            && d + (registers - 1) * spacing <= 31;
         return if defined && rn != PC {
-            Op::SimdStructure { load, d, registers, spacing, size, rn, rm, align }
+            Op::SimdStructure {
+                load,
+                d,
+                registers,
+                spacing,
+                size,
+                rn,
+                rm,
+                align,
+            }
         } else {
             Op::Slow
         };
@@ -1165,8 +1869,20 @@ fn thumb_simd_memory(insn: &DecodedInsn) -> Op {
         return Op::Slow;
     }
     match insn.mnemonic {
-        Mnemonic::VLD1 if raw & 0x20_0000 != 0 => Op::SimdLoad { d, count, rn, rm, align },
-        Mnemonic::VST1 if raw & 0x20_0000 == 0 => Op::SimdStore { d, count, rn, rm, align },
+        Mnemonic::VLD1 if raw & 0x20_0000 != 0 => Op::SimdLoad {
+            d,
+            count,
+            rn,
+            rm,
+            align,
+        },
+        Mnemonic::VST1 if raw & 0x20_0000 == 0 => Op::SimdStore {
+            d,
+            count,
+            rn,
+            rm,
+            align,
+        },
         _ => Op::Slow,
     }
 }
@@ -1181,7 +1897,9 @@ fn simd_expand_immediate(op: bool, cmode: u32, imm8: u64) -> Option<u64> {
         (0b1100, false) => words(imm8 << 8 | 0xff),
         (0b1101, false) => words(imm8 << 16 | 0xffff),
         (0b1110, false) => imm8 * 0x0101_0101_0101_0101,
-        (0b1110, true) => (0..8).filter(|bit| imm8 >> bit & 1 != 0).fold(0, |value, bit| value | 0xff << (bit * 8)),
+        (0b1110, true) => (0..8)
+            .filter(|bit| imm8 >> bit & 1 != 0)
+            .fold(0, |value, bit| value | 0xff << (bit * 8)),
         (0b1111, false) => words(vfp::vfp_expand_imm_f32(imm8 as u8).into()),
         _ => return None,
     })
@@ -1198,7 +1916,16 @@ fn simd_lane(insn: &DecodedInsn, raw: u32, quad: bool, d: u8, n: u8, m: u8) -> O
         let bad = (quad && !kind.is_long() && !kind.is_narrow() && (odd(d) || odd(n) || odd(m)))
             || (kind.is_long() && odd(d))
             || (kind.is_narrow() && odd(m));
-        (!bad).then_some(Op::SimdLane { kind, size, quad, unsigned, d, n, m, imm })
+        (!bad).then_some(Op::SimdLane {
+            kind,
+            size,
+            quad,
+            unsigned,
+            d,
+            n,
+            m,
+            imm,
+        })
     };
     if raw & 0xfe80_0000 == 0xf200_0000 {
         // Three registers of the same length.
@@ -1235,7 +1962,9 @@ fn simd_lane(insn: &DecodedInsn, raw: u32, quad: bool, d: u8, n: u8, m: u8) -> O
             (Mnemonic::VRSHRN, 0b1000) if !long_element && !unsigned && raw & 0x40 != 0 => {
                 lane(SimdLane::Rshrn, size, false, (base - imm6) as u8)
             }
-            (Mnemonic::VMOVL, 0b1010) if !long_element && raw & 0x40 == 0 && matches!(imm6, 8 | 16 | 32) => {
+            (Mnemonic::VMOVL, 0b1010)
+                if !long_element && raw & 0x40 == 0 && matches!(imm6, 8 | 16 | 32) =>
+            {
                 lane(SimdLane::Movl, size, unsigned, 0)
             }
             _ => None,
@@ -1270,7 +1999,17 @@ fn sign_extend_element(value: u64, bits: u32) -> i128 {
 
 /// Runs a SimdLane operation. Returns true when a result did not fit (QC).
 fn run_simd_lane(fp: &mut VfpState, op: Op) -> bool {
-    let Op::SimdLane { kind, size, quad, unsigned, d, n, m, imm } = op else {
+    let Op::SimdLane {
+        kind,
+        size,
+        quad,
+        unsigned,
+        d,
+        n,
+        m,
+        imm,
+    } = op
+    else {
         unreachable!();
     };
     let small = 8u32 << size;
@@ -1283,21 +2022,47 @@ fn run_simd_lane(fp: &mut VfpState, op: Op) -> bool {
         let high = if two { fp.read_d_bits(number + 1) } else { 0 };
         u128::from(high) << 64 | u128::from(fp.read_d_bits(number))
     };
-    let source_quad = if kind.is_long() { false } else { quad || kind.is_narrow() };
-    let result_quad = if kind.is_narrow() { false } else { quad || kind.is_long() };
-    let (a, b, old) = (register(fp, n, source_quad), register(fp, m, source_quad), register(fp, d, result_quad));
-    let element = |value: u128, bits: u32, index: u32| (value >> (bits * index)) as u64 & (u64::MAX >> (64 - bits));
-    let extend = |value: u64, bits: u32| if unsigned { i128::from(value) } else { sign_extend_element(value, bits) };
+    let source_quad = if kind.is_long() {
+        false
+    } else {
+        quad || kind.is_narrow()
+    };
+    let result_quad = if kind.is_narrow() {
+        false
+    } else {
+        quad || kind.is_long()
+    };
+    let (a, b, old) = (
+        register(fp, n, source_quad),
+        register(fp, m, source_quad),
+        register(fp, d, result_quad),
+    );
+    let element = |value: u128, bits: u32, index: u32| {
+        (value >> (bits * index)) as u64 & (u64::MAX >> (64 - bits))
+    };
+    let extend = |value: u64, bits: u32| {
+        if unsigned {
+            i128::from(value)
+        } else {
+            sign_extend_element(value, bits)
+        }
+    };
     let (low, high) = if unsigned {
         (0, (1i128 << result_bits) - 1)
     } else {
-        (-(1i128 << (result_bits - 1)), (1i128 << (result_bits - 1)) - 1)
+        (
+            -(1i128 << (result_bits - 1)),
+            (1i128 << (result_bits - 1)) - 1,
+        )
     };
     let count = if source_quad || result_quad { 128 } else { 64 } / source_bits.max(result_bits);
     let mut result = 0u128;
     let mut saturated = false;
     for index in 0..count {
-        let (x, y) = (extend(element(a, source_bits, index), source_bits), extend(element(b, source_bits, index), source_bits));
+        let (x, y) = (
+            extend(element(a, source_bits, index), source_bits),
+            extend(element(b, source_bits, index), source_bits),
+        );
         let z = i128::from(element(old, result_bits, index));
         let all_ones = |condition: bool| if condition { -1 } else { 0 };
         let mut saturate = |value: i128| {
@@ -1339,28 +2104,44 @@ fn simd(insn: &DecodedInsn, raw: u32, constants: &mut Vec<u64>) -> Op {
     let m = (bits(raw, 5, 1) << 4 | bits(raw, 0, 4)) as u8;
     if insn.mnemonic == Mnemonic::VMOV && raw & 0xfeb8_0090 == 0xf280_0010 {
         let imm8 = bits(raw, 24, 1) << 7 | bits(raw, 16, 3) << 4 | raw & 0xf;
-        let Some(value) = simd_expand_immediate(raw & 0x20 != 0, bits(raw, 8, 4), imm8.into()) else {
+        let Some(value) = simd_expand_immediate(raw & 0x20 != 0, bits(raw, 8, 4), imm8.into())
+        else {
             return Op::Slow;
         };
         if quad && d & 1 != 0 {
             return Op::Slow;
         }
         constants.push(value);
-        return Op::SimdImmediate { quad, d, constant: (constants.len() - 1) as u16 };
+        return Op::SimdImmediate {
+            quad,
+            d,
+            constant: (constants.len() - 1) as u16,
+        };
     }
     if let Some(op) = simd_lane(insn, raw, quad, d, n, m) {
         return op;
     }
     if raw & 0xfe90_0f10 == 0xf200_0e00 && !(quad && (d | n | m) & 1 != 0) {
-        let kind = match (insn.mnemonic, raw & 0x0100_0000 != 0, raw & 0x0020_0000 != 0) {
+        let kind = match (
+            insn.mnemonic,
+            raw & 0x0100_0000 != 0,
+            raw & 0x0020_0000 != 0,
+        ) {
             (Mnemonic::VCEQ, false, false) => SimdLane::Ceq,
             (Mnemonic::VCGE, true, false) => SimdLane::Cge,
             (Mnemonic::VCGT, true, true) => SimdLane::Cgt,
             _ => return Op::Slow,
         };
-        return Op::SimdFloatCompare { kind, quad, d, n, m };
+        return Op::SimdFloatCompare {
+            kind,
+            quad,
+            d,
+            n,
+            m,
+        };
     }
-    if insn.mnemonic == Mnemonic::VDUP && raw & 0xffb0_0f90 == 0xf3b0_0c00 && !(quad && d & 1 != 0) {
+    if insn.mnemonic == Mnemonic::VDUP && raw & 0xffb0_0f90 == 0xf3b0_0c00 && !(quad && d & 1 != 0)
+    {
         // The field imm4 gives the size and the number of the element.
         let imm4 = bits(raw, 16, 4);
         let size = imm4.trailing_zeros();
@@ -1368,10 +2149,26 @@ fn simd(insn: &DecodedInsn, raw: u32, constants: &mut Vec<u64>) -> Op {
             return Op::Slow;
         }
         let offset = (imm4 >> (size + 1) << size) as u8;
-        return Op::SimdDuplicate { quad, d, size: size as u8, from_core: false, source: m, offset };
+        return Op::SimdDuplicate {
+            quad,
+            d,
+            size: size as u8,
+            from_core: false,
+            source: m,
+            offset,
+        };
     }
-    if insn.mnemonic == Mnemonic::VMVN && raw & 0xffb3_0f90 == 0xf3b0_0580 && !(quad && (d | m) & 1 != 0) {
-        return Op::SimdLogic { kind: SimdLogic::Not, quad, d, n: m, m };
+    if insn.mnemonic == Mnemonic::VMVN
+        && raw & 0xffb3_0f90 == 0xf3b0_0580
+        && !(quad && (d | m) & 1 != 0)
+    {
+        return Op::SimdLogic {
+            kind: SimdLogic::Not,
+            quad,
+            d,
+            n: m,
+            m,
+        };
     }
     let kind = match insn.mnemonic {
         Mnemonic::VAND => SimdLogic::And,
@@ -1387,7 +2184,13 @@ fn simd(insn: &DecodedInsn, raw: u32, constants: &mut Vec<u64>) -> Op {
     if raw & 0xfe80_0f10 != 0xf200_0110 || (quad && (d | n | m) & 1 != 0) {
         return Op::Slow;
     }
-    Op::SimdLogic { kind, quad, d, n, m }
+    Op::SimdLogic {
+        kind,
+        quad,
+        d,
+        n,
+        m,
+    }
 }
 
 /// A VFP instruction in a T32 coprocessor encoding. The fields are those that the
@@ -1402,12 +2205,34 @@ fn thumb_vfp(insn: &DecodedInsn) -> Op {
     let (vd, vn, vm) = (bits(raw, 12, 4), bits(raw, 16, 4), bits(raw, 0, 4));
     let (d_bit, n_bit, m_bit) = (bits(raw, 22, 1), bits(raw, 7, 1), bits(raw, 5, 1));
     let single = |v: u32, bit: u32| (v << 1 | bit) as u8;
-    let register = |v: u32, bit: u32| if double { (bit << 4 | v) as u8 } else { single(v, bit) };
-    let (d, n, m) = (register(vd, d_bit), register(vn, n_bit), register(vm, m_bit));
+    let register = |v: u32, bit: u32| {
+        if double {
+            (bit << 4 | v) as u8
+        } else {
+            single(v, bit)
+        }
+    };
+    let (d, n, m) = (
+        register(vd, d_bit),
+        register(vn, n_bit),
+        register(vm, m_bit),
+    );
     let (rt, rt2) = (vd as u8, vn as u8);
     let data_processing = raw >> 24 == 0xee && raw & 0x10 == 0;
-    let binary = |kind| Op::FpBinary { kind, double, d, n, m };
-    let accumulate = |kind| Op::FpAccumulate { kind, double, d, n, m };
+    let binary = |kind| Op::FpBinary {
+        kind,
+        double,
+        d,
+        n,
+        m,
+    };
+    let accumulate = |kind| Op::FpAccumulate {
+        kind,
+        double,
+        d,
+        n,
+        m,
+    };
     let unary = |kind| Op::FpUnary { kind, double, d, m };
     let convert = |kind, d, m| Op::FpConvert { kind, d, m };
     let (d_single, m_single) = (single(vd, d_bit), single(vm, m_bit));
@@ -1416,19 +2241,41 @@ fn thumb_vfp(insn: &DecodedInsn) -> Op {
         Mnemonic::VLDM | Mnemonic::VPOP | Mnemonic::VSTM | Mnemonic::VPUSH if double => {
             let words = raw & 0xff;
             let count = (words / 2) as u8;
-            let (p, u, writeback) = (raw & 0x0100_0000 != 0, raw & 0x0080_0000 != 0, raw & 0x0020_0000 != 0);
+            let (p, u, writeback) = (
+                raw & 0x0100_0000 != 0,
+                raw & 0x0080_0000 != 0,
+                raw & 0x0020_0000 != 0,
+            );
             let decrement = match (p, u) {
                 (false, true) => false,
                 (true, false) if writeback => true,
                 _ => return Op::Slow,
             };
-            if raw >> 25 != 0b111_0110 || words % 2 != 0 || count == 0 || count > 16 || d + count > 32 || rt2 == PC {
+            if raw >> 25 != 0b111_0110
+                || words % 2 != 0
+                || count == 0
+                || count > 16
+                || d + count > 32
+                || rt2 == PC
+            {
                 return Op::Slow;
             }
             if raw & 0x0010_0000 != 0 {
-                Op::FpLoadMultiple { d, count, rn: rt2, decrement, writeback }
+                Op::FpLoadMultiple {
+                    d,
+                    count,
+                    rn: rt2,
+                    decrement,
+                    writeback,
+                }
             } else {
-                Op::FpStoreMultiple { d, count, rn: rt2, decrement, writeback }
+                Op::FpStoreMultiple {
+                    d,
+                    count,
+                    rn: rt2,
+                    decrement,
+                    writeback,
+                }
             }
         }
         Mnemonic::VLDR | Mnemonic::VSTR if raw >> 24 == 0xed && raw & 0x20_0000 == 0 => {
@@ -1439,13 +2286,27 @@ fn thumb_vfp(insn: &DecodedInsn) -> Op {
             } else if rt2 == PC {
                 Op::Slow
             } else if insn.mnemonic == Mnemonic::VLDR {
-                Op::FpLoad { double, d, rn: rt2, offset }
+                Op::FpLoad {
+                    double,
+                    d,
+                    rn: rt2,
+                    offset,
+                }
             } else {
-                Op::FpStore { double, d, rn: rt2, offset }
+                Op::FpStore {
+                    double,
+                    d,
+                    rn: rt2,
+                    offset,
+                }
             }
         }
         Mnemonic::VMOV if raw >> 21 == 0xec4 >> 1 && raw & 0xd0 == 0x10 => {
-            let v = if double { (m_bit << 4 | vm) as u8 } else { m_single };
+            let v = if double {
+                (m_bit << 4 | vm) as u8
+            } else {
+                m_single
+            };
             if any_pc(&[rt, rt2]) || (!double && v == 31) {
                 Op::Slow
             } else if raw & 0x10_0000 == 0 {
@@ -1458,7 +2319,11 @@ fn thumb_vfp(insn: &DecodedInsn) -> Op {
         }
         Mnemonic::VMOV if raw >> 21 == 0xee0 >> 1 && raw & 0x7f == 0x10 && !double && rt != PC => {
             let s = single(vn, n_bit);
-            if raw & 0x10_0000 == 0 { Op::FpFromCore { s, rt } } else { Op::FpToCore { rt, s } }
+            if raw & 0x10_0000 == 0 {
+                Op::FpFromCore { s, rt }
+            } else {
+                Op::FpToCore { rt, s }
+            }
         }
         Mnemonic::VMOV if raw & 0xff00_0f1f == 0xee00_0b10 && rt < SP => {
             // The fields opc1:opc2 give the size and the number of the element.
@@ -1474,8 +2339,19 @@ fn thumb_vfp(insn: &DecodedInsn) -> Op {
             let unsigned = raw & 0x80_0000 != 0;
             match (raw & 0x10_0000 != 0, unsigned) {
                 (true, true) if size == 2 => Op::Slow,
-                (true, _) => Op::FpElementToCore { rt, d, offset, size, signed: !unsigned && size != 2 },
-                (false, false) => Op::FpElementFromCore { d, offset, size, rt },
+                (true, _) => Op::FpElementToCore {
+                    rt,
+                    d,
+                    offset,
+                    size,
+                    signed: !unsigned && size != 2,
+                },
+                (false, false) => Op::FpElementFromCore {
+                    d,
+                    offset,
+                    size,
+                    rt,
+                },
                 (false, true) => Op::Slow,
             }
         }
@@ -1491,12 +2367,21 @@ fn thumb_vfp(insn: &DecodedInsn) -> Op {
             if quad && d & 1 != 0 {
                 return Op::Slow;
             }
-            Op::SimdDuplicate { quad, d, size, from_core: true, source: rt, offset: 0 }
+            Op::SimdDuplicate {
+                quad,
+                d,
+                size,
+                from_core: true,
+                source: rt,
+                offset: 0,
+            }
         }
         _ if !data_processing => Op::Slow,
-        Mnemonic::VMOV if raw & 0x00b0_00c0 == 0x00b0_0000 => {
-            Op::FpImmediate { double, d, imm: (vn << 4 | vm) as u8 }
-        }
+        Mnemonic::VMOV if raw & 0x00b0_00c0 == 0x00b0_0000 => Op::FpImmediate {
+            double,
+            d,
+            imm: (vn << 4 | vm) as u8,
+        },
         Mnemonic::VMOV if raw & 0x00bf_00c0 == 0x00b0_0040 => unary(FpUnary::Mov),
         Mnemonic::VABS => unary(FpUnary::Abs),
         Mnemonic::VNEG => unary(FpUnary::Neg),
@@ -1600,7 +2485,9 @@ pub fn fp_controls(cpu: &Armv7Cpu) -> u64 {
         cp15.scr,
         u32::from(cpu.cpsr.mode) | u32::from(cpu.is_secure()) << 8,
     ];
-    words.iter().fold(1, |key, &word| (key ^ u64::from(word)).wrapping_mul(0x100_0000_01b3)) | 1
+    words.iter().fold(1, |key, &word| {
+        (key ^ u64::from(word)).wrapping_mul(0x100_0000_01b3)
+    }) | 1
 }
 
 /// Shift_C of the architecture, with an amount of 0 to 255. RRX takes no amount.
@@ -1616,7 +2503,10 @@ fn shift_c(value: u32, shift: ShiftType, amount: u32, carry: bool) -> (u32, bool
         ShiftType::LSR if amount == 32 => (0, value >> 31 != 0),
         ShiftType::LSR => (value >> amount, value >> (amount - 1) & 1 != 0),
         ShiftType::ASR if amount >= 32 => ((value as i32 >> 31) as u32, value >> 31 != 0),
-        ShiftType::ASR => ((value as i32 >> amount) as u32, value >> (amount - 1) & 1 != 0),
+        ShiftType::ASR => (
+            (value as i32 >> amount) as u32,
+            value >> (amount - 1) & 1 != 0,
+        ),
         ShiftType::ROR => {
             let result = value.rotate_right(amount % 32);
             (result, result >> 31 != 0)
@@ -1683,7 +2573,9 @@ impl<M: Memory> Access<'_, M> {
     fn store(&mut self, width: Width, address: u32, value: u32) -> Result<(), Fault> {
         match width {
             Width::Byte | Width::SignedByte => self.store_bytes(address, [value as u8]),
-            Width::Half | Width::SignedHalf => self.store_bytes(address, (value as u16).to_le_bytes()),
+            Width::Half | Width::SignedHalf => {
+                self.store_bytes(address, (value as u16).to_le_bytes())
+            }
             Width::Word => self.store_bytes(address, value.to_le_bytes()),
         }
     }
@@ -1739,7 +2631,11 @@ impl Block {
     /// instruction with no decode. The block is empty when the first instruction has no
     /// decode or goes across the end of the bytes.
     pub fn translate(code: &[u8], offset: usize, thumb: bool) -> Block {
-        let decoder = Decoder::new(if thumb { ExecutionState::Thumb } else { ExecutionState::Aarch32 });
+        let decoder = Decoder::new(if thumb {
+            ExecutionState::Thumb
+        } else {
+            ExecutionState::Aarch32
+        });
         let mut steps = Vec::new();
         let mut insns = Vec::new();
         let mut constants = Vec::new();
@@ -1759,24 +2655,37 @@ impl Block {
                 _ if matches!(insn.mnemonic, Mnemonic::UNDEFINED | Mnemonic::UNKNOWN) => Op::Slow,
                 // An A32 PC that is not a multiple of 4 has no fast operation.
                 (false, _) if at % 4 != 0 => Op::Slow,
-                _ if matches!(insn.mnemonic, Mnemonic::DMB | Mnemonic::DSB | Mnemonic::ISB) => Op::Nop,
-                (true, true) | (false, _) if matches!(insn.mnemonic, Mnemonic::MCR | Mnemonic::MRC) => {
-                    if !thumb && insn.raw >> 28 == 0xf { Op::Slow } else { system(insn.raw) }
+                _ if matches!(insn.mnemonic, Mnemonic::DMB | Mnemonic::DSB | Mnemonic::ISB) => {
+                    Op::Nop
+                }
+                (true, true) | (false, _)
+                    if matches!(insn.mnemonic, Mnemonic::MCR | Mnemonic::MRC) =>
+                {
+                    if !thumb && insn.raw >> 28 == 0xf {
+                        Op::Slow
+                    } else {
+                        system(insn.raw)
+                    }
                 }
                 (false, _) if insn.raw >> 25 == 0b111_1001 => simd(&insn, insn.raw, &mut constants),
                 (false, _) => arm(insn.raw),
                 (true, false) => thumb16(insn.raw, in_it),
                 (true, true) if matches!(insn.raw >> 24, 0xec..=0xee) => thumb_vfp(&insn),
-                (true, true) if matches!(insn.raw >> 24, 0xef | 0xff) => {
-                    simd(&insn, ThumbDecoder::a32_equivalent(insn.raw).unwrap_or(insn.raw), &mut constants)
-                }
+                (true, true) if matches!(insn.raw >> 24, 0xef | 0xff) => simd(
+                    &insn,
+                    ThumbDecoder::a32_equivalent(insn.raw).unwrap_or(insn.raw),
+                    &mut constants,
+                ),
                 (true, true) if insn.raw & 0xff10_0000 == 0xf900_0000 => thumb_simd_memory(&insn),
                 (true, true) => thumb32(insn.raw),
             };
             // A branch is the last instruction of its IT block, and a conditional branch
             // or a second IT is not in an IT block: the other uses have no defined result.
             let last_in_it = psr.last_in_it_block();
-            if in_it && (matches!(op, Op::BranchCond { .. } | Op::It { .. }) || (op.can_branch() && !last_in_it)) {
+            if in_it
+                && (matches!(op, Op::BranchCond { .. } | Op::It { .. })
+                    || (op.can_branch() && !last_in_it))
+            {
                 op = Op::Slow;
             }
             // The executor makes the decision for the instructions that it runs.
@@ -1792,18 +2701,34 @@ impl Block {
             let it_state = psr.it_state;
             match op {
                 Op::It { state } => psr.it_state = state,
-                Op::BranchCond { cond: branch_cond, offset } => {
+                Op::BranchCond {
+                    cond: branch_cond,
+                    offset,
+                } => {
                     cond = branch_cond;
                     op = Op::Branch { offset };
                     psr.advance_it_state();
                 }
                 _ => psr.advance_it_state(),
             }
-            steps.push(Step { op, cond, it_state, offset: at as u16 });
+            steps.push(Step {
+                op,
+                cond,
+                it_state,
+                offset: at as u16,
+            });
             insns.push(insn);
             at += length;
-            let leaves = matches!(op, Op::Branch { .. } | Op::BranchLink { .. } | Op::BranchLinkArm { .. } | Op::BranchLinkToArm { .. } | Op::TableBranch { .. } | Op::BranchExchange { .. } | Op::BranchLinkExchange { .. })
-                || matches!(op, Op::Pop { mask } if mask & 1 << PC != 0);
+            let leaves = matches!(
+                op,
+                Op::Branch { .. }
+                    | Op::BranchLink { .. }
+                    | Op::BranchLinkArm { .. }
+                    | Op::BranchLinkToArm { .. }
+                    | Op::TableBranch { .. }
+                    | Op::BranchExchange { .. }
+                    | Op::BranchLinkExchange { .. }
+            ) || matches!(op, Op::Pop { mask } if mask & 1 << PC != 0);
             if leaves && cond == COND_ALWAYS {
                 break;
             }
@@ -1879,13 +2804,18 @@ impl Block {
     /// The offset in the page of the instruction `index`, or of the end of the block.
     #[inline]
     pub fn offset(&self, index: usize) -> u32 {
-        self.steps.get(index).map_or(self.end_offset, |step| step.offset).into()
+        self.steps
+            .get(index)
+            .map_or(self.end_offset, |step| step.offset)
+            .into()
     }
 
     /// ITSTATE before the instruction `index`, or after the last instruction.
     #[inline]
     pub fn it_state(&self, index: usize) -> u8 {
-        self.steps.get(index).map_or(self.end_it_state, |step| step.it_state)
+        self.steps
+            .get(index)
+            .map_or(self.end_it_state, |step| step.it_state)
     }
 
     /// Runs at most `limit` instructions from the instruction `start`. `page` is the
@@ -1911,7 +2841,11 @@ impl Block {
         let mut fp_state = None;
         macro_rules! access {
             () => {
-                Access { memory: &mut *memory, done: index - start, slow: &mut slow_access }
+                Access {
+                    memory: &mut *memory,
+                    done: index - start,
+                    slow: &mut slow_access,
+                }
             };
         }
         let exit = 'run: loop {
@@ -1937,7 +2871,13 @@ impl Block {
             }
             let target = match step.op {
                 Op::Slow => break Exit::Slow(index),
-                Op::FpBinary { kind, double: false, d, n, m } => {
+                Op::FpBinary {
+                    kind,
+                    double: false,
+                    d,
+                    n,
+                    m,
+                } => {
                     let fp = &mut cpu.vfp;
                     let (a, b) = (fp.read_s(n), fp.read_s(m));
                     let host = match kind {
@@ -1957,7 +2897,13 @@ impl Block {
                     fp.write_s(d, result);
                     None
                 }
-                Op::FpBinary { kind, double: true, d, n, m } => {
+                Op::FpBinary {
+                    kind,
+                    double: true,
+                    d,
+                    n,
+                    m,
+                } => {
                     let fp = &mut cpu.vfp;
                     let (a, b) = (fp.read_d(n), fp.read_d(m));
                     let result = match kind {
@@ -1970,7 +2916,13 @@ impl Block {
                     fp.write_d(d, result);
                     None
                 }
-                Op::FpAccumulate { kind, double: false, d, n, m } => {
+                Op::FpAccumulate {
+                    kind,
+                    double: false,
+                    d,
+                    n,
+                    m,
+                } => {
                     let fp = &mut cpu.vfp;
                     let (acc, a, b) = (fp.read_s(d), fp.read_s(n), fp.read_s(m));
                     let saved = fp.fpscr.bits();
@@ -1992,7 +2944,13 @@ impl Block {
                     fp.write_s(d, result);
                     None
                 }
-                Op::FpAccumulate { kind, double: true, d, n, m } => {
+                Op::FpAccumulate {
+                    kind,
+                    double: true,
+                    d,
+                    n,
+                    m,
+                } => {
                     let fp = &mut cpu.vfp;
                     let (acc, a, b) = (fp.read_d(d), fp.read_d(n), fp.read_d(m));
                     let result = match kind {
@@ -2004,17 +2962,32 @@ impl Block {
                     fp.write_d(d, result);
                     None
                 }
-                Op::FpUnary { kind: FpUnary::Mov, double: false, d, m } => {
+                Op::FpUnary {
+                    kind: FpUnary::Mov,
+                    double: false,
+                    d,
+                    m,
+                } => {
                     let fp = &mut cpu.vfp;
                     fp.write_s_bits(d, fp.read_s_bits(m));
                     None
                 }
-                Op::FpUnary { kind: FpUnary::Mov, double: true, d, m } => {
+                Op::FpUnary {
+                    kind: FpUnary::Mov,
+                    double: true,
+                    d,
+                    m,
+                } => {
                     let fp = &mut cpu.vfp;
                     fp.write_d_bits(d, fp.read_d_bits(m));
                     None
                 }
-                Op::FpUnary { kind, double: false, d, m } => {
+                Op::FpUnary {
+                    kind,
+                    double: false,
+                    d,
+                    m,
+                } => {
                     let fp = &mut cpu.vfp;
                     let value = fp.read_s(m);
                     let result = match kind {
@@ -2025,7 +2998,12 @@ impl Block {
                     fp.write_s(d, result);
                     None
                 }
-                Op::FpUnary { kind, double: true, d, m } => {
+                Op::FpUnary {
+                    kind,
+                    double: true,
+                    d,
+                    m,
+                } => {
                     let fp = &mut cpu.vfp;
                     let value = fp.read_d(m);
                     let result = match kind {
@@ -2036,28 +3014,58 @@ impl Block {
                     fp.write_d(d, result);
                     None
                 }
-                Op::FpCompare { all_nans_signal, with_zero, double: false, d, m } => {
+                Op::FpCompare {
+                    all_nans_signal,
+                    with_zero,
+                    double: false,
+                    d,
+                    m,
+                } => {
                     let fp = &mut cpu.vfp;
                     let other = if with_zero { 0.0 } else { fp.read_s(m) };
                     if !host_compare(fp.read_s(d).partial_cmp(&other), &mut fp.fpscr) {
-                        vfp::vcmp_f32_with_exception(fp.read_s(d), other, all_nans_signal, &mut fp.fpscr);
+                        vfp::vcmp_f32_with_exception(
+                            fp.read_s(d),
+                            other,
+                            all_nans_signal,
+                            &mut fp.fpscr,
+                        );
                     }
                     None
                 }
-                Op::FpCompare { all_nans_signal, with_zero, double: true, d, m } => {
+                Op::FpCompare {
+                    all_nans_signal,
+                    with_zero,
+                    double: true,
+                    d,
+                    m,
+                } => {
                     let fp = &mut cpu.vfp;
                     let other = if with_zero { 0.0 } else { fp.read_d(m) };
                     if !host_compare(fp.read_d(d).partial_cmp(&other), &mut fp.fpscr) {
-                        vfp::vcmp_f64_with_exception(fp.read_d(d), other, all_nans_signal, &mut fp.fpscr);
+                        vfp::vcmp_f64_with_exception(
+                            fp.read_d(d),
+                            other,
+                            all_nans_signal,
+                            &mut fp.fpscr,
+                        );
                     }
                     None
                 }
-                Op::FpImmediate { double: false, d, imm } => {
+                Op::FpImmediate {
+                    double: false,
+                    d,
+                    imm,
+                } => {
                     let fp = &mut cpu.vfp;
                     fp.write_s_bits(d, vfp::vfp_expand_imm_f32(imm));
                     None
                 }
-                Op::FpImmediate { double: true, d, imm } => {
+                Op::FpImmediate {
+                    double: true,
+                    d,
+                    imm,
+                } => {
                     let fp = &mut cpu.vfp;
                     fp.write_d_bits(d, vfp::vfp_expand_imm_f64(imm));
                     None
@@ -2110,27 +3118,54 @@ impl Block {
                     r!(rt) = cpu.vfp.read_s_bits(s);
                     None
                 }
-                Op::FpFromCorePair { double: false, v, rt, rt2 } => {
+                Op::FpFromCorePair {
+                    double: false,
+                    v,
+                    rt,
+                    rt2,
+                } => {
                     cpu.vfp.write_s_bits(v, r!(rt));
                     cpu.vfp.write_s_bits(v + 1, r!(rt2));
                     None
                 }
-                Op::FpFromCorePair { double: true, v, rt, rt2 } => {
-                    cpu.vfp.write_d_bits(v, u64::from(r!(rt)) | u64::from(r!(rt2)) << 32);
+                Op::FpFromCorePair {
+                    double: true,
+                    v,
+                    rt,
+                    rt2,
+                } => {
+                    cpu.vfp
+                        .write_d_bits(v, u64::from(r!(rt)) | u64::from(r!(rt2)) << 32);
                     None
                 }
-                Op::FpToCorePair { double: false, rt, rt2, v } => {
+                Op::FpToCorePair {
+                    double: false,
+                    rt,
+                    rt2,
+                    v,
+                } => {
                     r!(rt) = cpu.vfp.read_s_bits(v);
                     r!(rt2) = cpu.vfp.read_s_bits(v + 1);
                     None
                 }
-                Op::FpToCorePair { double: true, rt, rt2, v } => {
+                Op::FpToCorePair {
+                    double: true,
+                    rt,
+                    rt2,
+                    v,
+                } => {
                     let value = cpu.vfp.read_d_bits(v);
                     r!(rt) = value as u32;
                     r!(rt2) = (value >> 32) as u32;
                     None
                 }
-                Op::FpLoad { double, d, rn: _, offset } | Op::FpLoadLiteral { double, d, offset } => {
+                Op::FpLoad {
+                    double,
+                    d,
+                    rn: _,
+                    offset,
+                }
+                | Op::FpLoadLiteral { double, d, offset } => {
                     let base = match step.op {
                         Op::FpLoad { rn, .. } => r!(rn),
                         _ => pc.wrapping_add(4) & !3,
@@ -2148,28 +3183,52 @@ impl Block {
                         let Ok(high) = access!().load(Width::Word, address.wrapping_add(4)) else {
                             break Exit::Fault(index);
                         };
-                        cpu.vfp.write_d_bits(d, u64::from(high) << 32 | u64::from(low));
+                        cpu.vfp
+                            .write_d_bits(d, u64::from(high) << 32 | u64::from(low));
                     }
                     None
                 }
-                Op::FpStore { double, d, rn, offset } => {
+                Op::FpStore {
+                    double,
+                    d,
+                    rn,
+                    offset,
+                } => {
                     let address = r!(rn).wrapping_add(offset as u32);
                     if address & 3 != 0 {
                         break Exit::Slow(index);
                     }
-                    let value = if double { cpu.vfp.read_d_bits(d) } else { u64::from(cpu.vfp.read_s_bits(d)) };
+                    let value = if double {
+                        cpu.vfp.read_d_bits(d)
+                    } else {
+                        u64::from(cpu.vfp.read_s_bits(d))
+                    };
                     if access!().store(Width::Word, address, value as u32).is_err() {
                         break Exit::Fault(index);
                     }
-                    if double && access!().store(Width::Word, address.wrapping_add(4), (value >> 32) as u32).is_err() {
+                    if double
+                        && access!()
+                            .store(Width::Word, address.wrapping_add(4), (value >> 32) as u32)
+                            .is_err()
+                    {
                         break Exit::Fault(index);
                     }
                     None
                 }
-                Op::SimdLogic { kind, quad, d, n, m } => {
+                Op::SimdLogic {
+                    kind,
+                    quad,
+                    d,
+                    n,
+                    m,
+                } => {
                     for half in 0..=u8::from(quad) {
                         let fp = &mut cpu.vfp;
-                        let (a, b, c) = (fp.read_d_bits(d + half), fp.read_d_bits(n + half), fp.read_d_bits(m + half));
+                        let (a, b, c) = (
+                            fp.read_d_bits(d + half),
+                            fp.read_d_bits(n + half),
+                            fp.read_d_bits(m + half),
+                        );
                         let result = match kind {
                             SimdLogic::And => b & c,
                             SimdLogic::Bic => b & !c,
@@ -2185,7 +3244,13 @@ impl Block {
                     }
                     None
                 }
-                Op::SimdLoad { d, count, rn, rm, align } => {
+                Op::SimdLoad {
+                    d,
+                    count,
+                    rn,
+                    rm,
+                    align,
+                } => {
                     // Only direct loads: the executor changes a part of the registers
                     // when a later byte gives a fault.
                     let base = r!(rn);
@@ -2193,14 +3258,17 @@ impl Block {
                         break Exit::Slow(index);
                     }
                     let mut values = [0; 4];
-                    for (register, value) in values.iter_mut().enumerate().take(usize::from(count)) {
-                        let Some(bytes) = memory.load(base.wrapping_add(register as u32 * 8)) else {
+                    for (register, value) in values.iter_mut().enumerate().take(usize::from(count))
+                    {
+                        let Some(bytes) = memory.load(base.wrapping_add(register as u32 * 8))
+                        else {
                             break 'run Exit::Slow(index);
                         };
                         *value = u64::from_le_bytes(bytes);
                     }
                     for register in 0..count {
-                        cpu.vfp.write_d_bits(d + register, values[usize::from(register)]);
+                        cpu.vfp
+                            .write_d_bits(d + register, values[usize::from(register)]);
                     }
                     match rm {
                         PC => {}
@@ -2209,7 +3277,13 @@ impl Block {
                     }
                     None
                 }
-                Op::SimdStore { d, count, rn, rm, align } => {
+                Op::SimdStore {
+                    d,
+                    count,
+                    rn,
+                    rm,
+                    align,
+                } => {
                     // A store that is not direct leaves the instruction to the executor,
                     // which stores the same bytes again.
                     let base = r!(rn);
@@ -2244,19 +3318,38 @@ impl Block {
                     };
                     None
                 }
-                Op::MulHalves { rd, rn, rm, n_high, m_high } => {
-                    let half = |value: u32, high: bool| i32::from((if high { value >> 16 } else { value }) as i16);
+                Op::MulHalves {
+                    rd,
+                    rn,
+                    rm,
+                    n_high,
+                    m_high,
+                } => {
+                    let half = |value: u32, high: bool| {
+                        i32::from((if high { value >> 16 } else { value }) as i16)
+                    };
                     r!(rd) = half(r!(rn), n_high).wrapping_mul(half(r!(rm), m_high)) as u32;
                     None
                 }
-                Op::FpElementFromCore { d, offset, size, rt } => {
+                Op::FpElementFromCore {
+                    d,
+                    offset,
+                    size,
+                    rt,
+                } => {
                     let (offset, length) = (usize::from(offset), 1usize << size);
                     let mut bytes = cpu.vfp.read_d_bits(d).to_le_bytes();
                     bytes[offset..offset + length].copy_from_slice(&r!(rt).to_le_bytes()[..length]);
                     cpu.vfp.write_d_bits(d, u64::from_le_bytes(bytes));
                     None
                 }
-                Op::FpElementToCore { rt, d, offset, size, signed } => {
+                Op::FpElementToCore {
+                    rt,
+                    d,
+                    offset,
+                    size,
+                    signed,
+                } => {
                     let value = cpu.vfp.read_d_bits(d) >> (offset * 8);
                     r!(rt) = match (size, signed) {
                         (0, false) => u32::from(value as u8),
@@ -2267,18 +3360,39 @@ impl Block {
                     };
                     None
                 }
-                Op::SimdDuplicate { quad, d, size, from_core, source, offset } => {
-                    let element = if from_core { u64::from(r!(source)) } else { cpu.vfp.read_d_bits(source) >> (offset * 8) };
+                Op::SimdDuplicate {
+                    quad,
+                    d,
+                    size,
+                    from_core,
+                    source,
+                    offset,
+                } => {
+                    let element = if from_core {
+                        u64::from(r!(source))
+                    } else {
+                        cpu.vfp.read_d_bits(source) >> (offset * 8)
+                    };
                     let bits = 8u32 << size;
                     let element = element & (u64::MAX >> (64 - bits));
-                    let value = (0..64 / bits).fold(0, |value, lane| value | element << (lane * bits));
+                    let value =
+                        (0..64 / bits).fold(0, |value, lane| value | element << (lane * bits));
                     cpu.vfp.write_d_bits(d, value);
                     if quad {
                         cpu.vfp.write_d_bits(d + 1, value);
                     }
                     None
                 }
-                Op::SimdStructure { load, d, registers, spacing, size, rn, rm, align } => {
+                Op::SimdStructure {
+                    load,
+                    d,
+                    registers,
+                    spacing,
+                    size,
+                    rn,
+                    rm,
+                    align,
+                } => {
                     // Only direct accesses, as for SimdLoad and SimdStore.
                     let base = r!(rn);
                     if base % u32::from(align) != 0 {
@@ -2291,7 +3405,9 @@ impl Block {
                     let mut bytes = [0u8; 32];
                     if load {
                         for (chunk, part) in bytes.chunks_mut(8).enumerate().take(registers) {
-                            let Some(loaded) = memory.load::<8>(base.wrapping_add(chunk as u32 * 8)) else {
+                            let Some(loaded) =
+                                memory.load::<8>(base.wrapping_add(chunk as u32 * 8))
+                            else {
                                 break 'run Exit::Slow(index);
                             };
                             part.copy_from_slice(&loaded);
@@ -2299,19 +3415,25 @@ impl Block {
                         for number in 0..registers {
                             let mut value = [0u8; 8];
                             for lane in 0..8 / element {
-                                value[lane * element..][..element].copy_from_slice(&bytes[place(number, lane)..][..element]);
+                                value[lane * element..][..element]
+                                    .copy_from_slice(&bytes[place(number, lane)..][..element]);
                             }
-                            cpu.vfp.write_d_bits(register(number), u64::from_le_bytes(value));
+                            cpu.vfp
+                                .write_d_bits(register(number), u64::from_le_bytes(value));
                         }
                     } else {
                         for number in 0..registers {
                             let value = cpu.vfp.read_d_bits(register(number)).to_le_bytes();
                             for lane in 0..8 / element {
-                                bytes[place(number, lane)..][..element].copy_from_slice(&value[lane * element..][..element]);
+                                bytes[place(number, lane)..][..element]
+                                    .copy_from_slice(&value[lane * element..][..element]);
                             }
                         }
                         for (chunk, part) in bytes.chunks(8).enumerate().take(registers) {
-                            if !memory.store::<8>(base.wrapping_add(chunk as u32 * 8), part.try_into().unwrap()) {
+                            if !memory.store::<8>(
+                                base.wrapping_add(chunk as u32 * 8),
+                                part.try_into().unwrap(),
+                            ) {
                                 break 'run Exit::Slow(index);
                             }
                         }
@@ -2323,7 +3445,13 @@ impl Block {
                     }
                     None
                 }
-                Op::SimdFloatCompare { kind, quad, d, n, m } => {
+                Op::SimdFloatCompare {
+                    kind,
+                    quad,
+                    d,
+                    n,
+                    m,
+                } => {
                     let fp = &mut cpu.vfp;
                     let mut results = [0u64; 2];
                     for half in 0..=u8::from(quad) {
@@ -2343,7 +3471,8 @@ impl Block {
                                 SimdLane::Cge => x >= y,
                                 _ => x > y,
                             };
-                            results[usize::from(half)] |= u64::from(if holds { u32::MAX } else { 0 }) << (lane * 32);
+                            results[usize::from(half)] |=
+                                u64::from(if holds { u32::MAX } else { 0 }) << (lane * 32);
                         }
                     }
                     for half in 0..=u8::from(quad) {
@@ -2365,33 +3494,60 @@ impl Block {
                     }
                     None
                 }
-                Op::FpLoadMultiple { d, count, rn, decrement, writeback } => {
+                Op::FpLoadMultiple {
+                    d,
+                    count,
+                    rn,
+                    decrement,
+                    writeback,
+                } => {
                     // Only direct loads, as for SimdLoad.
                     let base = r!(rn);
                     let size = u32::from(count) * 8;
-                    let start = if decrement { base.wrapping_sub(size) } else { base };
+                    let start = if decrement {
+                        base.wrapping_sub(size)
+                    } else {
+                        base
+                    };
                     if start & 3 != 0 {
                         break Exit::Slow(index);
                     }
                     let mut values = [0; 16];
-                    for (register, value) in values.iter_mut().enumerate().take(usize::from(count)) {
-                        let Some(bytes) = memory.load(start.wrapping_add(register as u32 * 8)) else {
+                    for (register, value) in values.iter_mut().enumerate().take(usize::from(count))
+                    {
+                        let Some(bytes) = memory.load(start.wrapping_add(register as u32 * 8))
+                        else {
                             break 'run Exit::Slow(index);
                         };
                         *value = u64::from_le_bytes(bytes);
                     }
                     for register in 0..count {
-                        cpu.vfp.write_d_bits(d + register, values[usize::from(register)]);
+                        cpu.vfp
+                            .write_d_bits(d + register, values[usize::from(register)]);
                     }
                     if writeback {
-                        r!(rn) = if decrement { start } else { base.wrapping_add(size) };
+                        r!(rn) = if decrement {
+                            start
+                        } else {
+                            base.wrapping_add(size)
+                        };
                     }
                     None
                 }
-                Op::FpStoreMultiple { d, count, rn, decrement, writeback } => {
+                Op::FpStoreMultiple {
+                    d,
+                    count,
+                    rn,
+                    decrement,
+                    writeback,
+                } => {
                     let base = r!(rn);
                     let size = u32::from(count) * 8;
-                    let start = if decrement { base.wrapping_sub(size) } else { base };
+                    let start = if decrement {
+                        base.wrapping_sub(size)
+                    } else {
+                        base
+                    };
                     if start & 3 != 0 {
                         break Exit::Slow(index);
                     }
@@ -2402,7 +3558,11 @@ impl Block {
                         }
                     }
                     if writeback {
-                        r!(rn) = if decrement { start } else { base.wrapping_add(size) };
+                        r!(rn) = if decrement {
+                            start
+                        } else {
+                            base.wrapping_add(size)
+                        };
                     }
                     None
                 }
@@ -2415,7 +3575,14 @@ impl Block {
                     None
                 }
                 Op::Nop | Op::It { .. } => None,
-                Op::AluImm { kind, flags, carry, rd, rn, imm } => {
+                Op::AluImm {
+                    kind,
+                    flags,
+                    carry,
+                    rd,
+                    rn,
+                    imm,
+                } => {
                     let carry = match carry {
                         Carry::Keep => cpu.cpsr.c,
                         Carry::Clear => false,
@@ -2424,12 +3591,26 @@ impl Block {
                     alu(cpu, kind, flags, rd, r!(rn), imm, carry);
                     None
                 }
-                Op::AluReg { kind, flags, rd, rn, rm, shift, amount } => {
+                Op::AluReg {
+                    kind,
+                    flags,
+                    rd,
+                    rn,
+                    rm,
+                    shift,
+                    amount,
+                } => {
                     let (operand, carry) = shift_c(r!(rm), shift, u32::from(amount), cpu.cpsr.c);
                     alu(cpu, kind, flags, rd, r!(rn), operand, carry);
                     None
                 }
-                Op::ShiftReg { shift, flags, rd, rn, rm } => {
+                Op::ShiftReg {
+                    shift,
+                    flags,
+                    rd,
+                    rn,
+                    rm,
+                } => {
                     let (result, carry) = shift_c(r!(rn), shift, r!(rm) & 0xff, cpu.cpsr.c);
                     alu(cpu, Alu::Mov, flags, rd, 0, result, carry);
                     None
@@ -2446,7 +3627,12 @@ impl Block {
                     r!(rd) = (pc.wrapping_add(4) & !3).wrapping_add(offset as u32);
                     None
                 }
-                Op::Extend { kind, rd, rm, rotation } => {
+                Op::Extend {
+                    kind,
+                    rd,
+                    rm,
+                    rotation,
+                } => {
                     let value = r!(rm).rotate_right(u32::from(rotation));
                     r!(rd) = match kind {
                         Extend::Sxth => value as i16 as u32,
@@ -2515,7 +3701,9 @@ impl Block {
                     None
                 }
                 Op::Umaal { lo, hi, rn, rm } => {
-                    let sum = u64::from(r!(rn)) * u64::from(r!(rm)) + u64::from(r!(lo)) + u64::from(r!(hi));
+                    let sum = u64::from(r!(rn)) * u64::from(r!(rm))
+                        + u64::from(r!(lo))
+                        + u64::from(r!(hi));
                     r!(lo) = sum as u32;
                     r!(hi) = (sum >> 32) as u32;
                     None
@@ -2532,10 +3720,20 @@ impl Block {
                 }
                 Op::Sdiv { rd, rn, rm } => {
                     let divisor = r!(rm) as i32;
-                    r!(rd) = if divisor == 0 { 0 } else { (r!(rn) as i32).wrapping_div(divisor) as u32 };
+                    r!(rd) = if divisor == 0 {
+                        0
+                    } else {
+                        (r!(rn) as i32).wrapping_div(divisor) as u32
+                    };
                     None
                 }
-                Op::Load { width, rt, rn, index: mode, offset } => {
+                Op::Load {
+                    width,
+                    rt,
+                    rn,
+                    index: mode,
+                    offset,
+                } => {
                     let (address, base) = indexed(r!(rn), mode, offset);
                     let Ok(value) = access!().load(width, address) else {
                         break Exit::Fault(index);
@@ -2544,7 +3742,13 @@ impl Block {
                     r!(rt) = value;
                     None
                 }
-                Op::LoadReg { width, rt, rn, rm, shift } => {
+                Op::LoadReg {
+                    width,
+                    rt,
+                    rn,
+                    rm,
+                    shift,
+                } => {
                     let address = r!(rn).wrapping_add(r!(rm) << shift);
                     let Ok(value) = access!().load(width, address) else {
                         break Exit::Fault(index);
@@ -2560,7 +3764,13 @@ impl Block {
                     r!(rt) = value;
                     None
                 }
-                Op::Store { width, rt, rn, index: mode, offset } => {
+                Op::Store {
+                    width,
+                    rt,
+                    rn,
+                    index: mode,
+                    offset,
+                } => {
                     let (address, base) = indexed(r!(rn), mode, offset);
                     if access!().store(width, address, r!(rt)).is_err() {
                         break Exit::Fault(index);
@@ -2568,14 +3778,26 @@ impl Block {
                     r!(rn) = base;
                     None
                 }
-                Op::StoreReg { width, rt, rn, rm, shift } => {
+                Op::StoreReg {
+                    width,
+                    rt,
+                    rn,
+                    rm,
+                    shift,
+                } => {
                     let address = r!(rn).wrapping_add(r!(rm) << shift);
                     if access!().store(width, address, r!(rt)).is_err() {
                         break Exit::Fault(index);
                     }
                     None
                 }
-                Op::LoadPair { rt, rt2, rn, index: mode, offset } => {
+                Op::LoadPair {
+                    rt,
+                    rt2,
+                    rn,
+                    index: mode,
+                    offset,
+                } => {
                     let (address, base) = indexed(r!(rn), mode, offset);
                     if address & 3 != 0 {
                         break Exit::Slow(index);
@@ -2591,20 +3813,32 @@ impl Block {
                     r!(rt2) = second;
                     None
                 }
-                Op::StorePair { rt, rt2, rn, index: mode, offset } => {
+                Op::StorePair {
+                    rt,
+                    rt2,
+                    rn,
+                    index: mode,
+                    offset,
+                } => {
                     let (address, base) = indexed(r!(rn), mode, offset);
                     if address & 3 != 0 {
                         break Exit::Slow(index);
                     }
                     if access!().store(Width::Word, address, r!(rt)).is_err()
-                        || access!().store(Width::Word, address.wrapping_add(4), r!(rt2)).is_err()
+                        || access!()
+                            .store(Width::Word, address.wrapping_add(4), r!(rt2))
+                            .is_err()
                     {
                         break Exit::Fault(index);
                     }
                     r!(rn) = base;
                     None
                 }
-                Op::LoadMultiple { rn, mask, writeback } => {
+                Op::LoadMultiple {
+                    rn,
+                    mask,
+                    writeback,
+                } => {
                     let mut address = r!(rn);
                     if address & 3 != 0 {
                         break Exit::Slow(index);
@@ -2629,14 +3863,21 @@ impl Block {
                     }
                     None
                 }
-                Op::StoreMultiple { rn, mask, writeback } => {
+                Op::StoreMultiple {
+                    rn,
+                    mask,
+                    writeback,
+                } => {
                     let mut address = r!(rn);
                     if address & 3 != 0 {
                         break Exit::Slow(index);
                     }
                     for register in 0..15 {
                         if mask & 1 << register != 0 {
-                            if access!().store(Width::Word, address, cpu.regs[register]).is_err() {
+                            if access!()
+                                .store(Width::Word, address, cpu.regs[register])
+                                .is_err()
+                            {
                                 break 'run Exit::Fault(index);
                             }
                             address = address.wrapping_add(4);
@@ -2655,7 +3896,10 @@ impl Block {
                     let mut address = low;
                     for register in 0..15 {
                         if mask & 1 << register != 0 {
-                            if access!().store(Width::Word, address, cpu.regs[register]).is_err() {
+                            if access!()
+                                .store(Width::Word, address, cpu.regs[register])
+                                .is_err()
+                            {
                                 break 'run Exit::Fault(index);
                             }
                             address = address.wrapping_add(4);
@@ -2721,9 +3965,11 @@ impl Block {
                     };
                     Some(pc.wrapping_add(4).wrapping_add(entry * 2))
                 }
-                Op::CompareBranch { rn, nonzero, offset } => {
-                    ((r!(rn) != 0) == nonzero).then(|| pc.wrapping_add(4 + u32::from(offset)))
-                }
+                Op::CompareBranch {
+                    rn,
+                    nonzero,
+                    offset,
+                } => ((r!(rn) != 0) == nonzero).then(|| pc.wrapping_add(4 + u32::from(offset))),
                 Op::BranchExchange { rm } => {
                     let target = r!(rm);
                     cpu.cpsr.t = target & 1 != 0;
