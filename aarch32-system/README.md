@@ -68,7 +68,8 @@ when an operation did not run in an engine that has it. The dev profile also pas
 found two overflows of the `Executor` that only a build with overflow checks sees).
 
 `cargo test --release -p rax-aarch32-system --no-default-features` runs the same test with
-no compiler, as on another host.
+no compiler, as on another host. A second test runs a CP15 cache operation in User mode
+and in a privileged mode in the two engines: the random blocks have a privileged mode only.
 
 The system-level tests are in `prime-rax`: a boot of an unmodified OS to its first screens,
 compared with the one-instruction interpreter (a hash of the registers at each 4096
@@ -78,9 +79,9 @@ instructions, UART text, pictures) and with QEMU.
 
 - The compiler is for AArch64 macOS (MAP_JIT) and AArch64 Linux (the code pages are
   writable only for the time of a write). Other hosts have the interpreter only.
-  Checked: `cargo zigbuild --tests` for `aarch64-unknown-linux-musl` and
-  `x86_64-unknown-linux-musl`, and a run of the two test binaries in a Linux AArch64
-  container (the x86-64 one under emulation). The gnu targets and Windows were not built.
+  Checked: `cargo zigbuild --tests` for the musl and gnu targets of AArch64 and x86-64
+  Linux and for `x86_64-pc-windows-gnu`; a run of the two musl test binaries in a Linux
+  AArch64 container (the x86-64 one under emulation). The Windows build was not run.
 - Compiled code is for one virtual page of one physical page; a second virtual address of
   the same code compiles it again.
 - ARMv7-A without LPAE, big-endian data, ThumbEE or Jazelle. Short vectors and trapped FP
