@@ -8,6 +8,7 @@ use std::cell::Cell;
 
 use rax::arm::decoder::{ShiftType, ThumbDecoder};
 use rax::arm::execution::{add_with_carry, decode_imm_shift};
+use rax::arm::instructions::ExclusiveMonitor;
 use rax::arm::vfp::{self, Fpscr, VfpState};
 use rax::arm::{Armv7Cpu, DecodedInsn, Decoder, ExecutionState, Mnemonic, Psr};
 
@@ -61,6 +62,9 @@ pub trait Memory {
         bytes: [u8; N],
         done: usize,
     ) -> Result<(), Fault>;
+    /// The exclusive monitor of the CPU. It is the one that the machine gives to the
+    /// `Executor` and clears at each exception entry.
+    fn exclusive_monitor(&mut self) -> &mut ExclusiveMonitor;
 }
 
 /// Code that runs before each instruction of [`Block::run`].
@@ -604,6 +608,23 @@ enum Op {
         rm: u8,
         align: u8,
     },
+    /// LDREX, LDREXB and LDREXH. `size` is the size of the access in bytes.
+    LoadExclusive {
+        size: u8,
+        rt: u8,
+        rn: u8,
+        offset: u16,
+    },
+    /// STREX, STREXB and STREXH: `rd` gets 0 when the store was done, else 1.
+    StoreExclusive {
+        size: u8,
+        rd: u8,
+        rt: u8,
+        rn: u8,
+        offset: u16,
+    },
+    /// CLREX.
+    ClearExclusive,
     /// A cache or barrier operation of CP15: no effect in a privileged mode.
     CacheOperation,
     /// MRC of TPIDRURW, TPIDRURO or TPIDRPRW (`register` 0 to 2).
@@ -1565,6 +1586,43 @@ fn thumb32(raw: u32) -> Op {
     }
 
     if hw1 >> 9 == 0b1110100 {
+        // The exclusive loads and stores of one register. The others (two registers,
+        // and the forms with no defined result) go to the executor.
+        let status = rm;
+        let exclusive = match (raw & 0xfff0_0000, bits(hw2, 4, 4)) {
+            (0xe850_0000, _) if rd == PC => Some((true, 4, PC, (hw2 & 0xff) * 4)),
+            (0xe840_0000, _) => Some((false, 4, rd, (hw2 & 0xff) * 4)),
+            (0xe8d0_0000, 0b0100 | 0b0101) if rd == PC && rm == PC => {
+                Some((true, 1 << (hw2 >> 4 & 1), PC, 0))
+            }
+            (0xe8c0_0000, 0b0100 | 0b0101) if rd == PC => {
+                Some((false, 1 << (hw2 >> 4 & 1), status, 0))
+            }
+            _ => None,
+        };
+        if let Some((load, size, status, offset)) = exclusive {
+            let (size, offset) = (size as u8, offset as u16);
+            return match load {
+                true if !any_sp_or_pc(&[rt]) && rn != PC => Op::LoadExclusive {
+                    size,
+                    rt,
+                    rn,
+                    offset,
+                },
+                false
+                    if !any_sp_or_pc(&[rt, status]) && rn != PC && status != rn && status != rt =>
+                {
+                    Op::StoreExclusive {
+                        size,
+                        rd: status,
+                        rt,
+                        rn,
+                        offset,
+                    }
+                }
+                _ => Op::Slow,
+            };
+        }
         let (p, u, w) = (hw1 & 0x100 != 0, hw1 & 0x80 != 0, hw1 & 0x20 != 0);
         let load = hw1 & 0x10 != 0;
         if raw & 0xfff0_ffe0 == 0xe8d0_f000 {
@@ -2679,6 +2737,7 @@ impl Block {
                 _ if matches!(insn.mnemonic, Mnemonic::DMB | Mnemonic::DSB | Mnemonic::ISB) => {
                     Op::Nop
                 }
+                _ if insn.mnemonic == Mnemonic::CLREX => Op::ClearExclusive,
                 (true, true) | (false, _)
                     if matches!(insn.mnemonic, Mnemonic::MCR | Mnemonic::MRC) =>
                 {
@@ -3322,6 +3381,51 @@ impl Block {
                         SP => r!(rn) = base.wrapping_add(u32::from(count) * 8),
                         _ => r!(rn) = base.wrapping_add(r!(rm)),
                     }
+                    None
+                }
+                Op::LoadExclusive {
+                    size,
+                    rt,
+                    rn,
+                    offset,
+                } => {
+                    let address = r!(rn).wrapping_add(offset.into());
+                    if !address.is_multiple_of(size.into()) {
+                        break Exit::Slow(index);
+                    }
+                    // The executor marks the address before the read, also when the
+                    // read gives a fault.
+                    memory.exclusive_monitor().mark_exclusive(address, size);
+                    let width =
+                        [Width::Byte, Width::Half, Width::Word][size.trailing_zeros() as usize];
+                    let Ok(value) = access!().load(width, address) else {
+                        break Exit::Fault(index);
+                    };
+                    r!(rt) = value;
+                    None
+                }
+                Op::StoreExclusive {
+                    size,
+                    rd,
+                    rt,
+                    rn,
+                    offset,
+                } => {
+                    let address = r!(rn).wrapping_add(offset.into());
+                    if !address.is_multiple_of(size.into()) {
+                        break Exit::Slow(index);
+                    }
+                    let width =
+                        [Width::Byte, Width::Half, Width::Word][size.trailing_zeros() as usize];
+                    let stored = memory.exclusive_monitor().check_and_clear(address, size);
+                    if stored && access!().store(width, address, r!(rt)).is_err() {
+                        break Exit::Fault(index);
+                    }
+                    r!(rd) = u32::from(!stored);
+                    None
+                }
+                Op::ClearExclusive => {
+                    memory.exclusive_monitor().clear();
                     None
                 }
                 Op::CacheOperation => {

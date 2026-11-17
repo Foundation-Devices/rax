@@ -1,4 +1,5 @@
 use rax::arm::execution::{ArmMemory, MemoryError};
+use rax::arm::instructions::ExclusiveMonitor;
 use rax::arm::vfp::Fpscr;
 use rax::arm::{ExecResult, Executor};
 
@@ -13,8 +14,14 @@ const MEMORY_SIZE: usize = 0x8000;
 const CODE_PAGE: u32 = MEMORY_BASE + 0x7000;
 const PAGE_SIZE: usize = 0x1000;
 
-#[derive(Clone, PartialEq)]
-struct FlatMemory(Vec<u8>);
+#[derive(Clone)]
+struct FlatMemory(Vec<u8>, ExclusiveMonitor);
+
+impl PartialEq for FlatMemory {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0 && (self.1.address, self.1.size) == (other.1.address, other.1.size)
+    }
+}
 
 impl FlatMemory {
     fn range(&self, address: u32, length: usize) -> Option<std::ops::Range<usize>> {
@@ -59,6 +66,10 @@ impl Memory for FlatMemory {
         _done: usize,
     ) -> Result<(), Fault> {
         Err(Fault)
+    }
+
+    fn exclusive_monitor(&mut self) -> &mut ExclusiveMonitor {
+        &mut self.1
     }
 }
 
@@ -113,12 +124,16 @@ fn executor_step(
 ) -> bool {
     let pc = cpu.regs[15];
     let advance_it = cpu.cpsr.in_it_block();
+    // The monitor of the memory, as a machine gives it to the executor.
+    let monitor = std::mem::take(&mut memory.1);
     let mut executor = Executor::new(cpu, memory);
+    executor.exclusive_monitor = monitor;
     let result = if admitted {
         executor.execute_admitted_again(insn)
     } else {
         executor.execute(insn)
     };
+    memory.1 = std::mem::take(&mut executor.exclusive_monitor);
     match result {
         ExecResult::Continue => cpu.regs[15] = pc.wrapping_add(u32::from(insn.size)),
         ExecResult::Branch(target) => {
@@ -135,7 +150,7 @@ fn executor_step(
 
 /// T32 encodings of the groups that have fast operations: the fixed bits, the random
 /// bits, and true when the two copies of Rm must be equal.
-const WIDE_TEMPLATES: [(u32, u32, bool); 55] = [
+const WIDE_TEMPLATES: [(u32, u32, bool); 60] = [
     (0xf000_0000, 0x07ff_ffff, false),
     (0xf000_0000, 0x07ff_ffff, false),
     (0xe800_0000, 0x01ff_ffff, false),
@@ -195,6 +210,12 @@ const WIDE_TEMPLATES: [(u32, u32, bool); 55] = [
     (0xee00_0b10, 0x00ff_f0e0, false),
     (0xee80_0b10, 0x006f_f0a0, false),
     (0xffb0_0c00, 0x004f_f06f, false),
+    // LDREX, STREX, LDREXB and LDREXH, STREXB and STREXH, CLREX.
+    (0xe850_0f00, 0x000f_f0ff, false),
+    (0xe840_0000, 0x000f_ffff, false),
+    (0xe8d0_0f4f, 0x000f_f010, false),
+    (0xe8c0_0f40, 0x000f_f01f, false),
+    (0xf3bf_8f2f, 0x0000_0000, false),
     // VSHL by a register.
     (0xef00_0400, 0x107f_f0ef, false),
 ];
@@ -505,7 +526,11 @@ fn run_compiled(
             // give the bytes of `memory`.
             unsafe { compiled.jit.run(&mut run.context, code) };
             let count = room - run.context.budget as usize;
-            for step in &entry.steps[..count] {
+            // An instruction with a condition is in the count also when it did not run.
+            for step in entry.steps[..count]
+                .iter()
+                .filter(|step| step.cond == COND_ALWAYS)
+            {
                 compiled.covered.insert(operation_name(step.op));
             }
             done += count;
@@ -639,7 +664,10 @@ fn compare_random_block(
 #[test]
 fn fast_interpreter_agrees_with_executor_on_random_code() {
     let mut random = Random(0x9e37_79b9_7f4a_7c15);
-    let mut memory = FlatMemory((0..MEMORY_SIZE).map(|_| random.next() as u8).collect());
+    let mut memory = FlatMemory(
+        (0..MEMORY_SIZE).map(|_| random.next() as u8).collect(),
+        ExclusiveMonitor::new(),
+    );
     let mut covered = HashSet::new();
     let no_page = [u64::MAX << 32, 0, 0, 0];
     let mut compiled = Jit::new().map(|jit| Compiled {
@@ -666,6 +694,7 @@ fn fast_interpreter_agrees_with_executor_on_random_code() {
         "BranchLinkExchange",
         "BranchLinkToArm",
         "CacheOperation",
+        "ClearExclusive",
         "Clz",
         "CompareBranch",
         "Extend",
@@ -689,6 +718,7 @@ fn fast_interpreter_agrees_with_executor_on_random_code() {
         "FpUnary",
         "It",
         "Load",
+        "LoadExclusive",
         "LoadLiteral",
         "LoadMultiple",
         "LoadPair",
@@ -734,6 +764,7 @@ fn fast_interpreter_agrees_with_executor_on_random_code() {
         "SimdStructure",
         "Smull",
         "Store",
+        "StoreExclusive",
         "StoreMultiple",
         "StorePair",
         "StoreReg",
@@ -860,7 +891,7 @@ fn it_block_gives_its_condition_to_the_next_instructions() {
     assert_eq!(block.len(), 4);
     let mut cpu = Armv7Cpu::new();
     cpu.cpsr.z = false;
-    let mut memory = FlatMemory(vec![0; MEMORY_SIZE]);
+    let mut memory = FlatMemory(vec![0; MEMORY_SIZE], ExclusiveMonitor::new());
     assert_eq!(
         block.run(0, 3, 0x8000, &mut cpu, &mut memory, &mut NoHook),
         (3, Exit::Done)
@@ -878,11 +909,30 @@ fn it_block_gives_its_condition_to_the_next_instructions() {
 }
 
 #[test]
+fn strex_stores_one_time_after_ldrex() {
+    // LDREX r1, [r0]; STREX r2, r3, [r0]; STREX r4, r3, [r0] (T32).
+    let mut code = [0u8; 12];
+    let halfwords = [0xe850_u16, 0x1f00, 0xe840, 0x3200, 0xe840, 0x3400];
+    for (index, halfword) in halfwords.into_iter().enumerate() {
+        code[index * 2..index * 2 + 2].copy_from_slice(&halfword.to_le_bytes());
+    }
+    let block = Block::translate(&code, 0, true);
+    let mut cpu = Armv7Cpu::new();
+    cpu.regs[0] = MEMORY_BASE + 0x100;
+    cpu.regs[3] = 0x1234_5678;
+    let mut memory = FlatMemory(vec![0; MEMORY_SIZE], ExclusiveMonitor::new());
+    let run = block.run(0, 3, CODE_PAGE, &mut cpu, &mut memory, &mut NoHook);
+    assert_eq!(run, (3, Exit::Done));
+    assert_eq!((cpu.regs[1], cpu.regs[2], cpu.regs[4]), (0, 0, 1));
+    assert_eq!(memory.0[0x100..0x104], 0x1234_5678_u32.to_le_bytes());
+}
+
+#[test]
 fn cache_operation_is_fast_only_in_a_privileged_mode() {
     // MCR p15, 0, r0, c7, c6, 1 (DCIMVAC, T32).
     let code = [0x07, 0xee, 0x36, 0x0f];
     let block = Rc::new(Block::translate(&code, 0, true));
-    let mut memory = FlatMemory(vec![0; MEMORY_SIZE]);
+    let mut memory = FlatMemory(vec![0; MEMORY_SIZE], ExclusiveMonitor::new());
     let mut jit = Jit::new();
     let table = vec![[u64::MAX << 32, 0, 0, 0]; 1 << jit::TLB_BITS];
     for (mode, count) in [(USER_MODE, 0), (0x13, 1)] {
