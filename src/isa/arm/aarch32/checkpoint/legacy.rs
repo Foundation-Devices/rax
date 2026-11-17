@@ -248,6 +248,7 @@ impl LegacyCp15State {
             hvbar: self.hvbar,
             hsr: self.hsr,
             elr_hyp: self.elr_hyp,
+            vbar: 0,
             ttbr0: self.ttbr0,
             ttbr1: self.ttbr1,
             ttbcr: self.ttbcr,

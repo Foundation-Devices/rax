@@ -90,6 +90,10 @@ pub struct Cp15State {
     pub hvbar: u32,
     pub hsr: u32,
     pub elr_hyp: u32,
+    /// Vector Base Address Register (VBAR). Not in the positional checkpoint
+    /// layout, which a new field would change.
+    #[serde(skip)]
+    pub vbar: u32,
 
     // =========================================================================
     // Translation Table Registers - CRn=2
@@ -236,6 +240,7 @@ impl Default for Cp15State {
             hvbar: 0,
             hsr: 0,
             elr_hyp: 0,
+            vbar: 0,
 
             // Translation tables
             ttbr0: 0,
@@ -331,6 +336,7 @@ impl Cp15State {
             (1, 4, 1, 2) => Some(self.hcptr),
             (1, 4, 0, 0) => Some(self.hsctlr.bits()),
             (12, 4, 0, 0) => Some(self.hvbar),
+            (12, 0, 0, 0) => Some(self.vbar),
             (5, 4, 2, 0) => Some(self.hsr),
 
             // CRn=2: Translation table
@@ -419,6 +425,10 @@ impl Cp15State {
             }
             (12, 4, 0, 0) => {
                 self.hvbar = value & !31;
+                true
+            }
+            (12, 0, 0, 0) => {
+                self.vbar = value & !31;
                 true
             }
             (5, 4, 2, 0) => {
@@ -581,6 +591,11 @@ impl Cp15State {
 
             _ => false, // Unknown or read-only register
         }
+    }
+
+    /// The exception vector base: the high vectors with SCTLR.V, else VBAR.
+    pub fn vector_base(&self) -> u32 {
+        if self.sctlr.v() { 0xFFFF0000 } else { self.vbar }
     }
 
     /// Check if MMU is enabled.
@@ -847,6 +862,20 @@ mod tests {
         // Read MPIDR
         let mpidr = cp15.read(Cp15Encoding::new(0, 0, 0, 5));
         assert_eq!(mpidr, Some(0x80000000));
+    }
+
+    #[test]
+    fn vbar_is_the_vector_base_without_high_vectors() {
+        let mut cp15 = Cp15State::new();
+        let vbar = Cp15Encoding::new(12, 0, 0, 0);
+
+        assert_eq!(cp15.vector_base(), 0);
+        assert!(cp15.write(vbar, 0x0020_001f));
+        assert_eq!(cp15.read(vbar), Some(0x0020_0000));
+        assert_eq!(cp15.vector_base(), 0x0020_0000);
+
+        cp15.write(Cp15Encoding::new(1, 0, 0, 0), 1 << 13);
+        assert_eq!(cp15.vector_base(), 0xFFFF_0000);
     }
 
     #[test]

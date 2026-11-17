@@ -13,6 +13,7 @@ const MOV_R0_42: u32 = 0xE3A0_002A; // mov r0, #42
 const STR_R0_R1: u32 = 0xE581_0000; // str r0, [r1]
 const LDR_R0_R1: u32 = 0xE591_0000; // ldr r0, [r1]
 const SVC_0: u32 = 0xEF00_0000; // svc #0
+const MCR_VBAR_R0: u32 = 0xEE0C_0F10; // mcr p15, 0, r0, c12, c0, 0
 const WFI: u32 = 0xE320_F003;
 const NOP: u32 = 0xE320_F000;
 const USER_MODE: u32 = 0x10;
@@ -144,6 +145,15 @@ fn svc_is_taken_through_the_vector_table() {
     assert_eq!(st.regs.lr, CODE as u32 + 4, "preferred return address");
     assert_eq!(st.regs.spsr & 0x1F, USER_MODE);
     assert_eq!(vcpu.instruction_count(), 1);
+}
+
+#[test]
+fn svc_is_taken_through_the_vector_base_that_the_guest_set() {
+    let (mut vcpu, _) = new_vcpu(&[MCR_VBAR_R0, SVC_0]);
+    set_r(&mut vcpu, 0, DATA as u32);
+    assert!(vcpu.step_insn().unwrap().is_none());
+    assert!(vcpu.step_insn().unwrap().is_none());
+    assert_eq!(state(&vcpu).regs.pc, DATA as u32 + 0x08, "the SVC vector at VBAR");
 }
 
 #[test]

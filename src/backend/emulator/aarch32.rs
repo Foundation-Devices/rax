@@ -283,7 +283,7 @@ impl Aarch32Vcpu {
     }
 
     fn take_exception(&mut self, exception: ExceptionType) {
-        let vbar = self.cpu.cp15.sctlr.vector_base();
+        let vbar = self.cpu.cp15.vector_base();
         let mut exec = Executor::with_vbar(&mut self.cpu, &mut self.bridge, vbar);
         exec.exclusive_monitor = self.excl.clone();
         exec.take_exception(exception);
@@ -347,7 +347,7 @@ impl Aarch32Vcpu {
             .decode(&bytes[..len as usize])
             .map_err(|_| self.undefined(pc, raw))?;
 
-        let vbar = self.cpu.cp15.sctlr.vector_base();
+        let vbar = self.cpu.cp15.vector_base();
         let advance_it = is_thumb && self.cpu.cpsr.in_it_block();
         let snapshot = (self.cpu.regs, self.cpu.cpsr.clone());
         let result = {
