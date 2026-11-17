@@ -1424,6 +1424,23 @@ fn t32_extends_rotate_their_source() {
 }
 
 #[test]
+fn ssat_to_32_bits_keeps_each_value() {
+    // SSAT r0, #32, r1 then SSAT r0, #8, r1.
+    for (raw, value, want, saturated) in [
+        (0xf301_001f, 0x8000_0000, 0x8000_0000, false),
+        (0xf301_001f, 0x7fff_ffff, 0x7fff_ffff, false),
+        (0xf301_0007, 0x8000_0000, 0xffff_ff80, true),
+        (0xf301_0007, 0x0000_1234, 0x0000_007f, true),
+    ] {
+        let mut cpu = thumb_cpu(0x1000);
+        cpu.regs[1] = value;
+        let mut mem = make_mem();
+        completes(Executor::new(&mut cpu, &mut mem).execute(&t32(raw)));
+        assert_eq!((cpu.regs[0], cpu.cpsr.q), (want, saturated), "{raw:#010x} of {value:#010x}");
+    }
+}
+
+#[test]
 fn thumb_adr_is_the_word_aligned_pc_plus_or_minus_its_offset() {
     // Encodings from LLVM 23.1.1: ADR r1, #24 (T1), ADR.W r0, #291 (ADDW
     // r0, pc), ADR.W r0, #-16 (SUBW r0, pc). At 0x1002 the base is

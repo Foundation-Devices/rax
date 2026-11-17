@@ -611,8 +611,9 @@ impl<'a, M: ArmMemory> Executor<'a, M> {
         let shift_type = if sh { ShiftType::ASR } else { ShiftType::LSL };
         let operand = shift_c(self.reg(n), shift_type, shift_amount, false).0 as i32;
 
-        let max_val = (1i32 << (sat_imm - 1)) - 1;
-        let min_val = -(1i32 << (sat_imm - 1));
+        // The saturation to 32 bits has the limits of i32: no shift of 1 gives them.
+        let max_val = i32::MAX >> (32 - sat_imm);
+        let min_val = !max_val;
 
         let result = if operand > max_val {
             self.cpu.cpsr.q = true;
