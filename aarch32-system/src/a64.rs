@@ -274,7 +274,7 @@ impl Asm {
         self.fixups.clear();
     }
 
-    fn to_label(&mut self, word: u32, label: Label) {
+    fn branch_to(&mut self, word: u32, label: Label) {
         self.fixups.push((self.words.len(), label.0));
         self.emit(word);
     }
@@ -436,7 +436,7 @@ impl Asm {
     /// LDP or STP of two 32-bit registers at `rn + offset`.
     pub fn pair(&mut self, load: bool, rt: Reg, rt2: Reg, rn: Reg, offset: usize) {
         let op = if load { 0x2940_0000 } else { 0x2900_0000 };
-        assert!(offset % 4 == 0 && offset < 256);
+        assert!(offset.is_multiple_of(4) && offset < 256);
         self.emit(
             op | (offset as u32 / 4) << 15
                 | u32::from(rt2) << 10
@@ -448,7 +448,7 @@ impl Asm {
     /// LDP or STP of two 64-bit registers at `rn + offset`.
     pub fn pair_x(&mut self, load: bool, rt: Reg, rt2: Reg, rn: Reg, offset: usize) {
         let op = if load { 0xa940_0000 } else { 0xa900_0000 };
-        assert!(offset % 8 == 0 && offset < 512);
+        assert!(offset.is_multiple_of(8) && offset < 512);
         self.emit(
             op | (offset as u32 / 8) << 15
                 | u32::from(rt2) << 10
@@ -458,7 +458,7 @@ impl Asm {
     }
 
     pub fn b(&mut self, label: Label) {
-        self.to_label(0x1400_0000, label);
+        self.branch_to(0x1400_0000, label);
     }
 
     pub fn b_to(&mut self, address: usize) {
@@ -472,24 +472,24 @@ impl Asm {
     }
 
     pub fn b_cond(&mut self, cond: u32, label: Label) {
-        self.to_label(0x5400_0000 | cond, label);
+        self.branch_to(0x5400_0000 | cond, label);
     }
 
     /// CBZ of a 32-bit register.
     pub fn cbz(&mut self, rt: Reg, label: Label) {
-        self.to_label(0x3400_0000 | u32::from(rt), label);
+        self.branch_to(0x3400_0000 | u32::from(rt), label);
     }
 
     pub fn cbnz(&mut self, rt: Reg, label: Label) {
-        self.to_label(0x3500_0000 | u32::from(rt), label);
+        self.branch_to(0x3500_0000 | u32::from(rt), label);
     }
 
     pub fn cbnz_x(&mut self, rt: Reg, label: Label) {
-        self.to_label(0xb500_0000 | u32::from(rt), label);
+        self.branch_to(0xb500_0000 | u32::from(rt), label);
     }
 
     pub fn tbnz(&mut self, rt: Reg, bit: u32, label: Label) {
-        self.to_label(
+        self.branch_to(
             0x3700_0000 | (bit >> 5) << 31 | (bit & 31) << 19 | u32::from(rt),
             label,
         );

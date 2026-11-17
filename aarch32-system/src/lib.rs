@@ -2260,7 +2260,7 @@ fn thumb_vfp(insn: &DecodedInsn) -> Op {
                 _ => return Op::Slow,
             };
             if raw >> 25 != 0b111_0110
-                || words % 2 != 0
+                || !words.is_multiple_of(2)
                 || count == 0
                 || count > 16
                 || d + count > 32
@@ -2662,7 +2662,7 @@ impl Block {
             let mut op = match (thumb, wide) {
                 _ if matches!(insn.mnemonic, Mnemonic::UNDEFINED | Mnemonic::UNKNOWN) => Op::Slow,
                 // An A32 PC that is not a multiple of 4 has no fast operation.
-                (false, _) if at % 4 != 0 => Op::Slow,
+                (false, _) if !at.is_multiple_of(4) => Op::Slow,
                 _ if matches!(insn.mnemonic, Mnemonic::DMB | Mnemonic::DSB | Mnemonic::ISB) => {
                     Op::Nop
                 }
@@ -3262,7 +3262,7 @@ impl Block {
                     // Only direct loads: the executor changes a part of the registers
                     // when a later byte gives a fault.
                     let base = r!(rn);
-                    if base % u32::from(align) != 0 {
+                    if !base.is_multiple_of(u32::from(align)) {
                         break Exit::Slow(index);
                     }
                     let mut values = [0; 4];
@@ -3295,7 +3295,7 @@ impl Block {
                     // A store that is not direct leaves the instruction to the executor,
                     // which stores the same bytes again.
                     let base = r!(rn);
-                    if base % u32::from(align) != 0 {
+                    if !base.is_multiple_of(u32::from(align)) {
                         break Exit::Slow(index);
                     }
                     for register in 0..count {
@@ -3403,7 +3403,7 @@ impl Block {
                 } => {
                     // Only direct accesses, as for SimdLoad and SimdStore.
                     let base = r!(rn);
-                    if base % u32::from(align) != 0 {
+                    if !base.is_multiple_of(u32::from(align)) {
                         break Exit::Slow(index);
                     }
                     let (registers, element) = (usize::from(registers), 1usize << size);
@@ -3861,9 +3861,9 @@ impl Block {
                             address = address.wrapping_add(4);
                         }
                     }
-                    for register in 0..15 {
+                    for (register, value) in values.iter().enumerate().take(15) {
                         if mask & 1 << register != 0 {
-                            cpu.regs[register] = values[register];
+                            cpu.regs[register] = *value;
                         }
                     }
                     if writeback {
@@ -3931,9 +3931,9 @@ impl Block {
                             address = address.wrapping_add(4);
                         }
                     }
-                    for register in 0..15 {
+                    for (register, value) in values.iter().enumerate().take(15) {
                         if mask & 1 << register != 0 {
-                            cpu.regs[register] = values[register];
+                            cpu.regs[register] = *value;
                         }
                     }
                     r!(13u8) = address;

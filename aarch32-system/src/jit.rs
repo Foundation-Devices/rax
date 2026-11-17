@@ -433,6 +433,10 @@ enum CarryOut {
     Register,
 }
 
+/// Branches to guest addresses with no code: the address (T bit in bit 0) and the index
+/// of the word of the branch.
+type Links = Vec<(u32, usize)>;
+
 struct Compiler<'a> {
     asm: Asm,
     block: &'a Block,
@@ -450,7 +454,7 @@ struct Compiler<'a> {
     entries: &'a HashMap<u32, usize>,
     /// The branches to guest addresses in the page with no code: the address and the
     /// index of the word of the branch.
-    links: Vec<(u32, usize)>,
+    links: Links,
     /// A branch to `leave_to_address`, in the range of each conditional branch.
     no_jump: Label,
 }
@@ -549,6 +553,7 @@ impl Compiler<'_> {
         a.msr(a64::NZCV, T1);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn alu_imm(
         &mut self,
         kind: Alu,
@@ -1883,7 +1888,7 @@ impl Compiler<'_> {
     /// Returns the code and its branches to addresses of the page with no code (the
     /// address and the index of the word), or None when the first instruction has no
     /// compiled form.
-    fn compile(mut self) -> Option<(Vec<u32>, Vec<(u32, usize)>)> {
+    fn compile(mut self) -> Option<(Vec<u32>, Links)> {
         let block = self.block;
         let steps = &block.steps;
         let live = live_flags(steps, |index| self.always_has_code(index));
