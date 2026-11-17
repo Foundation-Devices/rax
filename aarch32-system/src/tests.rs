@@ -14,6 +14,12 @@ const MEMORY_SIZE: usize = 0x8000;
 const CODE_PAGE: u32 = MEMORY_BASE + 0x7000;
 const PAGE_SIZE: usize = 0x1000;
 
+mod blocks;
+mod engine;
+mod machine;
+mod programs;
+mod suite;
+
 #[derive(Clone)]
 struct FlatMemory(Vec<u8>, ExclusiveMonitor);
 
