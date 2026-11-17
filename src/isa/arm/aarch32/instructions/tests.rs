@@ -1424,6 +1424,23 @@ fn t32_extends_rotate_their_source() {
 }
 
 #[test]
+fn smmls_and_smmla_wrap_their_64_bit_sum() {
+    // SMMLS r0, r1, r2, r3 and SMMLAR r0, r1, r2, r3 (A32).
+    for (raw, accumulator, want) in [
+        (0xe750_32d1, 0x8000_0000, 0x4000_0000),
+        (0xe750_3231, 0x7fff_ffff, 0xbfff_fffe),
+    ] {
+        let mut cpu = make_cpu();
+        cpu.regs[1] = 0x7fff_ffff;
+        cpu.regs[2] = 0x7fff_ffff;
+        cpu.regs[3] = accumulator;
+        let mut mem = make_mem();
+        completes(Executor::new(&mut cpu, &mut mem).execute(&a32(raw)));
+        assert_eq!(cpu.regs[0], want, "{raw:#010x}");
+    }
+}
+
+#[test]
 fn ssat_to_32_bits_keeps_each_value() {
     // SSAT r0, #32, r1 then SSAT r0, #8, r1.
     for (raw, value, want, saturated) in [
