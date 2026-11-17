@@ -1183,6 +1183,32 @@ fn t32_vldr_with_a_negative_offset_is_not_a_core_register_move() {
 }
 
 #[test]
+fn execute_admitted_again_gives_the_result_of_execute() {
+    // VADD.F32 s0, s1, s2; VCGT.U8 q9, q1, q10; ADDS r0, r1, #1 with a false condition.
+    for (insn, condition_passes) in [
+        (t32(0xee30_0a81), true),
+        (t32(0xff42_23e4), true),
+        (a32(0x1291_0001), false),
+    ] {
+        let mut first = make_cpu();
+        first.vfp.fpexc = 0x4000_0000;
+        first.cpsr.z = !condition_passes;
+        first.regs[1] = 41;
+        first.vfp.dregs[0] = 0x4000_0000_3f80_0000;
+        first.vfp.dregs[1] = 0x0000_0000_4040_0000;
+        first.vfp.dregs[2] = 0x0102_0304_0506_0708;
+        let mut second = first.clone();
+        let mut mem = make_mem();
+        completes(Executor::new(&mut first, &mut mem).execute(&insn));
+        completes(Executor::new(&mut second, &mut mem).execute_admitted_again(&insn));
+        assert_eq!(first.regs, second.regs);
+        assert_eq!(first.cpsr.to_u32(), second.cpsr.to_u32());
+        assert_eq!(first.vfp.dregs, second.vfp.dregs);
+        assert_eq!(first.vfp.fpscr.bits(), second.vfp.fpscr.bits());
+    }
+}
+
+#[test]
 fn msr_writes_the_it_bits_of_the_spsr() {
     // MSR SPSR_cxsf, r1 in IRQ mode, after an interrupt in an IT block.
     let mut cpu = make_cpu();
