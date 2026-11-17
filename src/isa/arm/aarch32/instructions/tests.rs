@@ -1168,6 +1168,18 @@ fn t32_vldr_literal_reads_from_the_aligned_pc_plus_four() {
 }
 
 #[test]
+fn msr_writes_the_it_bits_of_the_spsr() {
+    // MSR SPSR_cxsf, r1 in IRQ mode, after an interrupt in an IT block.
+    let mut cpu = make_cpu();
+    cpu.change_mode(ProcessorMode::Irq);
+    cpu.spsr_irq = Psr::from_u32(0x6000_38f0);
+    cpu.regs[1] = 0x6000_00f0;
+    let mut mem = make_mem();
+    completes(Executor::new(&mut cpu, &mut mem).execute(&a32(0xe16f_f001)));
+    assert_eq!(cpu.spsr_irq.to_u32(), 0x6000_00f0);
+}
+
+#[test]
 fn t32_coprocessor_moves_reach_the_system_registers() {
     // MRC p15, 0, r0, c13, c0, 3 (TPIDRURO) and VMRS r0, FPSCR at PL0.
     let mut cpu = thumb_cpu(0x1000);

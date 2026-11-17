@@ -101,9 +101,7 @@ impl<'a, M: ArmMemory> Executor<'a, M> {
                 spsr.c = ((value >> 29) & 1) != 0;
                 spsr.v = ((value >> 28) & 1) != 0;
                 spsr.q = ((value >> 27) & 1) != 0;
-                if !features.is_empty() {
-                    spsr.it_state = (spsr.it_state & !3) | ((value >> 25) & 3) as u8;
-                }
+                spsr.it_state = (spsr.it_state & !3) | ((value >> 25) & 3) as u8;
             }
             if (mask & 4) != 0 {
                 spsr.ge = ((value >> 16) & 0xF) as u8;
@@ -119,9 +117,7 @@ impl<'a, M: ArmMemory> Executor<'a, M> {
                 }
             }
             if (mask & 2) != 0 {
-                if !features.is_empty() {
-                    spsr.it_state = (spsr.it_state & 3) | (((value >> 10) & 63) << 2) as u8;
-                }
+                spsr.it_state = (spsr.it_state & 3) | (((value >> 10) & 63) << 2) as u8;
                 spsr.e = ((value >> 9) & 1) != 0;
                 spsr.a = ((value >> 8) & 1) != 0;
             }
