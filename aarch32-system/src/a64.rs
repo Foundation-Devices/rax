@@ -124,6 +124,8 @@ pub const V_NOT: u32 = 0x2e20_5800;
 /// SQADD and UQADD.
 pub const V_QADD: u32 = 0x0e20_0c00;
 pub const V_QSUB: u32 = 0x0e20_2c00;
+/// SSHL and USHL: a shift by the signed low byte of each element of the second operand.
+pub const V_SHL: u32 = 0x0e20_4400;
 /// CMGT and CMHI.
 pub const V_CMGT: u32 = 0x0e20_3400;
 /// CMGE and CMHS.

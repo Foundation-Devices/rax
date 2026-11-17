@@ -1034,6 +1034,8 @@ impl Compiler<'_> {
             SimdLane::Mls => a.rrr(a64::V_MLS | quad | sized, V2, V0, V1),
             SimdLane::Qadd => a.rrr(a64::V_QADD | quad | sign | sized, V0, V0, V1),
             SimdLane::Qsub => a.rrr(a64::V_QSUB | quad | sign | sized, V0, V0, V1),
+            // The host takes the value first and the amounts second.
+            SimdLane::Shl => a.rrr(a64::V_SHL | quad | sign | sized, V0, V1, V0),
             SimdLane::Shr => a.rr(a64::V_SHR | quad | sign | shift(imm.into()), V0, V1),
             SimdLane::Rshr => a.rr(a64::V_RSHR | quad | sign | shift(imm.into()), V0, V1),
             SimdLane::Mull => a.rrr(a64::V_MULL | sign | sized, V0, V0, V1),

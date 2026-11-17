@@ -135,7 +135,7 @@ fn executor_step(
 
 /// T32 encodings of the groups that have fast operations: the fixed bits, the random
 /// bits, and true when the two copies of Rm must be equal.
-const WIDE_TEMPLATES: [(u32, u32, bool); 54] = [
+const WIDE_TEMPLATES: [(u32, u32, bool); 55] = [
     (0xf000_0000, 0x07ff_ffff, false),
     (0xf000_0000, 0x07ff_ffff, false),
     (0xe800_0000, 0x01ff_ffff, false),
@@ -195,6 +195,8 @@ const WIDE_TEMPLATES: [(u32, u32, bool); 54] = [
     (0xee00_0b10, 0x00ff_f0e0, false),
     (0xee80_0b10, 0x006f_f0a0, false),
     (0xffb0_0c00, 0x004f_f06f, false),
+    // VSHL by a register.
+    (0xef00_0400, 0x107f_f0ef, false),
 ];
 
 /// A32 encodings of the groups that have fast operations: the fixed bits and the random bits.
@@ -723,6 +725,7 @@ fn fast_interpreter_agrees_with_executor_on_random_code() {
         "SimdLaneQsub",
         "SimdLaneRshr",
         "SimdLaneRshrn",
+        "SimdLaneShl",
         "SimdLaneShr",
         "SimdLaneSub",
         "SimdLoad",
@@ -823,6 +826,7 @@ fn fast_interpreter_agrees_with_executor_on_random_code() {
         "SimdLaneQsub",
         "SimdLaneRshr",
         "SimdLaneRshrn",
+        "SimdLaneShl",
         "SimdLaneShr",
         "SimdLaneSub",
         "SimdLoad",
@@ -871,6 +875,61 @@ fn it_block_gives_its_condition_to_the_next_instructions() {
         (2, Exit::Done)
     );
     assert_eq!((cpu.regs[15], cpu.cpsr.it_state), (0x8004, 0x18));
+}
+
+#[test]
+fn cache_operation_is_fast_only_in_a_privileged_mode() {
+    // MCR p15, 0, r0, c7, c6, 1 (DCIMVAC, T32).
+    let code = [0x07, 0xee, 0x36, 0x0f];
+    let block = Rc::new(Block::translate(&code, 0, true));
+    let mut memory = FlatMemory(vec![0; MEMORY_SIZE]);
+    let mut jit = Jit::new();
+    let table = vec![[u64::MAX << 32, 0, 0, 0]; 1 << jit::TLB_BITS];
+    for (mode, count) in [(USER_MODE, 0), (0x13, 1)] {
+        let mut cpu = Armv7Cpu::new();
+        cpu.cpsr.t = true;
+        cpu.cpsr.mode = mode;
+        cpu.regs[15] = CODE_PAGE;
+        let exit = if count == 0 {
+            Exit::Slow(0)
+        } else {
+            Exit::Done
+        };
+        let run = block.run(0, 1, CODE_PAGE, &mut cpu.clone(), &mut memory, &mut NoHook);
+        assert_eq!(run, (count, exit));
+
+        let Some(jit) = &mut jit else {
+            continue;
+        };
+        block.tier.set(Tier::Cold { runs: u32::MAX });
+        let fp = FpControls {
+            controls: fp_controls(&cpu),
+            fpscr: 0,
+        };
+        let mut bytes = [0; PAGE_SIZE];
+        bytes[..4].copy_from_slice(&code);
+        let entry = jit.code(&block, CODE_PAGE, fp, || (0, bytes)).unwrap();
+        let mut run = CompiledRun {
+            context: Context {
+                cpu: &mut cpu,
+                jumps: jit.jumps(0, (0, 0)),
+                reads: table.as_ptr().cast(),
+                writes: table.as_ptr().cast(),
+                budget: 1,
+                site: std::ptr::null(),
+                fp_controls: fp.controls,
+                load: compiled_load,
+                store: compiled_store,
+            },
+            memory: &mut memory,
+            stop: false,
+        };
+        // SAFETY: the code is that of the block at the PC; the table has no direct entry.
+        let left = unsafe { jit.run(&mut run.context, entry) };
+        // In User mode the code leaves before the instruction.
+        assert_eq!(left.map(|(_, index)| index), (count == 0).then_some(0));
+        assert_eq!(1 - run.context.budget, count as i64);
+    }
 }
 
 #[test]

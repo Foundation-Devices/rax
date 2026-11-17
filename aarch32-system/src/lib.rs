@@ -221,6 +221,9 @@ enum SimdLane {
     Mls,
     Qadd,
     Qsub,
+    /// VSHL by a register: the low byte of each element of `n` is a signed amount, to
+    /// the left when it is positive. The value is in `m`.
+    Shl,
     /// Shifts to the right by the immediate value, with no rounding and with it.
     Shr,
     Rshr,
@@ -1940,6 +1943,7 @@ fn simd_lane(insn: &DecodedInsn, raw: u32, quad: bool, d: u8, n: u8, m: u8) -> O
         let kind = match (insn.mnemonic, opcode, raw & 0x10 != 0, unsigned) {
             (Mnemonic::VQADD, 0b0000, true, _) => SimdLane::Qadd,
             (Mnemonic::VQSUB, 0b0010, true, _) => SimdLane::Qsub,
+            (Mnemonic::VSHL, 0b0100, false, _) => SimdLane::Shl,
             (Mnemonic::VCGT, 0b0011, false, _) => SimdLane::Cgt,
             (Mnemonic::VCGE, 0b0011, true, _) => SimdLane::Cge,
             (Mnemonic::VADD, 0b1000, false, false) => SimdLane::Add,
@@ -2089,6 +2093,15 @@ fn run_simd_lane(fp: &mut VfpState, op: Op) -> bool {
             SimdLane::Mls => z.wrapping_sub(x.wrapping_mul(y)),
             SimdLane::Qadd => saturate(x + y),
             SimdLane::Qsub => saturate(x - y),
+            SimdLane::Shl => {
+                let amount = i32::from(element(a, source_bits, index) as u8 as i8);
+                match amount {
+                    0.. if amount as u32 >= result_bits => 0,
+                    0.. => y << amount,
+                    _ if amount.unsigned_abs() >= result_bits => all_ones(y < 0),
+                    _ => y >> amount.unsigned_abs(),
+                }
+            }
             SimdLane::Shr => y >> imm,
             SimdLane::Rshr | SimdLane::Rshrn => (y + (1 << (imm - 1))) >> imm,
             SimdLane::Movl => y,

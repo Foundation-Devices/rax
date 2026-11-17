@@ -6,6 +6,12 @@ description = "Block execution engine for ARMv7-A system emulation on the RAX AA
 license = "MIT"
 repository = "https://github.com/HexRaysSA/rax"
 readme = "README.md"
+include = [
+    "/src/**/*.rs",
+    "/Cargo.toml",
+    "/README.md",
+    "/LICENSE",
+]
 
 [features]
 default = ["jit"]
