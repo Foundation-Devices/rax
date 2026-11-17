@@ -21,8 +21,10 @@ its memory and its time to the engine through the interfaces below.
 ## Interface
 
 - `Memory` (trait of the machine): `load`/`store` for an access with no side effect (the
-  machine answers from `Tlb::direct`), and `load_slow`/`store_slow` for an access with all
-  its effects (translation, peripherals, faults).
+  machine answers from `Tlb::direct`), `load_slow`/`store_slow` for an access with all
+  its effects (translation, peripherals, faults), and `exclusive_monitor`: the monitor of
+  LDREX and STREX, which the machine also gives to the `Executor` and clears at each
+  exception entry. The compiled code has no exclusive access: it leaves to the interpreter.
 - `tlb::PhysicalMemory` (trait of the machine): a word of a translation table, and how the
   accesses go to a physical page (`Page::Direct` with a host address, `Page::Memory`,
   `Page::Other`).
