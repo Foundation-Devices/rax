@@ -11,7 +11,7 @@ impl Aarch32Decoder {
         let coproc = (raw >> 8) & 0xF;
         if ((raw >> 4) & 1) != 1
             || !matches!(coproc, 0b1010 | 0b1011)
-            || ((raw >> 21) & 0x7) != 0b010
+            || ((raw >> 21) & 0x1F) != 0b00010
             || (raw & 0xC0) != 0
         {
             return None;

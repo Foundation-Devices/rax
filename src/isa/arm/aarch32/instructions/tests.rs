@@ -1168,6 +1168,21 @@ fn t32_vldr_literal_reads_from_the_aligned_pc_plus_four() {
 }
 
 #[test]
+fn t32_vldr_with_a_negative_offset_is_not_a_core_register_move() {
+    // VLDR d16, [r7, #-120]: P = 1 and U = 0, where VMOV r0, r7, d14 has P = U = 0.
+    let mut cpu = thumb_cpu(0x1000);
+    cpu.vfp.fpexc = 0x4000_0000;
+    cpu.regs[0] = 0xaaaa_aaaa;
+    cpu.regs[7] = 0x2078;
+    let mut mem = make_mem();
+    mem.write_word(0x2000, 0x5566_7788).unwrap();
+    mem.write_word(0x2004, 0x1122_3344).unwrap();
+    completes(Executor::new(&mut cpu, &mut mem).execute(&t32(0xed57_0b1e)));
+    assert_eq!(cpu.vfp.dregs[16], 0x1122_3344_5566_7788);
+    assert_eq!((cpu.regs[0], cpu.regs[7]), (0xaaaa_aaaa, 0x2078));
+}
+
+#[test]
 fn msr_writes_the_it_bits_of_the_spsr() {
     // MSR SPSR_cxsf, r1 in IRQ mode, after an interrupt in an IT block.
     let mut cpu = make_cpu();
