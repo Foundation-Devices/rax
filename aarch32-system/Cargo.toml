@@ -1,0 +1,15 @@
+[package]
+name = "rax-aarch32-system"
+version = "0.1.0"
+edition = "2024"
+description = "Block execution engine for ARMv7-A system emulation on the RAX AArch32 core"
+license = "MIT"
+repository = "https://github.com/HexRaysSA/rax"
+readme = "README.md"
+
+[dependencies]
+rax = { path = "..", default-features = false }
+
+# The compiler maps its code with MAP_JIT. It exists only on AArch64 macOS.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

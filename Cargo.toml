@@ -1,5 +1,5 @@
 [workspace]
-members = ["capi"]
+members = ["capi", "aarch32-system"]
 # Standalone in-tree packages that build independently (own targets / build
 # scripts) and must NOT be pulled into this workspace.
 exclude = [

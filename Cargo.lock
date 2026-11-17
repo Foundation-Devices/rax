@@ -482,6 +482,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rax-aarch32-system"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "rax",
+]
+
+[[package]]
 name = "rax-capi"
 version = "0.1.2"
 dependencies = [
