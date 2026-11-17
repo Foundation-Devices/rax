@@ -206,7 +206,7 @@ pub struct Jit {
     pub stats: Stats,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(feature = "jit", target_arch = "aarch64", target_os = "macos"))]
 unsafe extern "C" {
     fn sys_icache_invalidate(start: *mut libc::c_void, length: usize);
 }
@@ -215,7 +215,7 @@ unsafe extern "C" {
 ///
 /// # Safety
 /// The range is in the mapping of a `Jit`, and no code of the range runs now.
-#[cfg(target_os = "macos")]
+#[cfg(all(feature = "jit", target_arch = "aarch64", target_os = "macos"))]
 unsafe fn write_code(start: *mut u32, code: &[u32]) {
     // SAFETY: the range (caller). The mapping takes writes of this thread only between
     // the two calls, and the host keeps old code until the last call.
@@ -228,7 +228,7 @@ unsafe fn write_code(start: *mut u32, code: &[u32]) {
 }
 
 /// `Jit::new` gives no compiler on this host.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(all(feature = "jit", target_arch = "aarch64", target_os = "macos")))]
 unsafe fn write_code(_start: *mut u32, _code: &[u32]) {
     unreachable!();
 }
@@ -1054,6 +1054,62 @@ impl Compiler<'_> {
                 }
             }
             Op::SimdLane { .. } => self.simd_lane(step.op),
+            Op::SimdStructure { load, d, registers, spacing, size, rn, rm, align } => {
+                self.aligned_to(index, rn, align.into());
+                self.direct(index, rn, u32::from(registers) * 8, if load { READS } else { WRITES });
+                self.asm.add_uxtw(T1, T1, rn);
+                // The host has the same order of the elements, with registers in sequence.
+                let op = (if registers == 4 { a64::V_ST4 } else { a64::V_ST3 }) | u32::from(size) << 10;
+                if load {
+                    self.asm.rr(op | a64::V_STRUCTURE_LOAD, V0, T1);
+                }
+                for number in 0..registers {
+                    self.fp_reg(if load { a64::STRD } else { a64::LDRD }, V0 + number, d + number * spacing);
+                }
+                if !load {
+                    self.asm.rr(op, V0, T1);
+                }
+                match rm {
+                    PC => {}
+                    SP => self.asm.imm12(a64::ADD_IMM, rn, rn, u32::from(registers) * 8),
+                    _ => self.asm.rrr(a64::ADD, rn, rn, rm),
+                }
+            }
+            Op::SimdFloatCompare { kind, quad, d, n, m } => {
+                let (load, store) = if quad { (a64::LDRQ, a64::STRQ) } else { (a64::LDRD, a64::STRD) };
+                self.fp_reg(load, V0, n);
+                self.fp_reg(load, V1, m);
+                let leave = self.leave_at(index);
+                let a = &mut self.asm;
+                // V4: the elements of an operand that are a NaN or a denormal number.
+                // The 4 elements of the host registers are in the test: the high ones
+                // are 0 after a load of a D register.
+                let (smallest, infinity, magnitude, first, second, bad) = (6, 7, 2, 3, 5, 4);
+                let words = a64::QUAD | 2 << 22;
+                a.mov_imm(T0, 0x0080_0000);
+                a.rr(a64::V_DUP_WORD, smallest, T0);
+                a.mov_imm(T0, 0x7f80_0000);
+                a.rr(a64::V_DUP_WORD, infinity, T0);
+                for (operand, target) in [(V0, bad), (V1, first)] {
+                    a.rr(a64::V_FABS, magnitude, operand);
+                    a.rrr(a64::V_CMGT | a64::UNSIGNED | words, target, smallest, magnitude);
+                    a.rrr(a64::V_CMTST | words, second, magnitude, magnitude);
+                    a.rrr(a64::V_AND | a64::QUAD, target, target, second);
+                    a.rrr(a64::V_CMGT | a64::UNSIGNED | words, second, magnitude, infinity);
+                    a.rrr(a64::V_ORR | a64::QUAD, target, target, second);
+                }
+                a.rrr(a64::V_ORR | a64::QUAD, bad, bad, first);
+                a.rr(a64::V_UMAXV_WORDS, bad, bad);
+                a.rr(a64::FMOV_TO_CORE, T0, bad);
+                a.cbnz(T0, leave);
+                let op = match kind {
+                    SimdLane::Ceq => a64::V_FCMEQ,
+                    SimdLane::Cge => a64::V_FCMGE,
+                    _ => a64::V_FCMGT,
+                };
+                a.rrr(op | a64::QUAD, V0, V0, V1);
+                self.fp_reg(store, V0, d);
+            }
             Op::SimdImmediate { quad, d, constant } => {
                 a.mov_imm64(T0, self.block.constants[usize::from(constant)]);
                 self.fp_reg(a64::STRX, T0, d);
@@ -1556,14 +1612,15 @@ fn stubs(base: usize) -> (Vec<u32>, Stubs) {
 }
 
 impl Jit {
-    /// None when the host is not AArch64 macOS, or gives no memory for code, or has FP
-    /// controls that are not the ones of the compiled FP code.
-    #[cfg(not(all(target_arch = "aarch64", target_os = "macos")))]
+    /// None when the crate has no feature `jit`, or the host is not AArch64 macOS, or
+    /// gives no memory for code, or has FP controls that are not the ones of the compiled
+    /// FP code.
+    #[cfg(not(all(feature = "jit", target_arch = "aarch64", target_os = "macos")))]
     pub fn new() -> Option<Jit> {
         None
     }
 
-    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
+    #[cfg(all(feature = "jit", target_arch = "aarch64", target_os = "macos"))]
     pub fn new() -> Option<Jit> {
         let fpcr: u64;
         // SAFETY: a read of a register with no effect.
@@ -1699,6 +1756,7 @@ impl Jit {
     /// The compiled code left at the instruction `index` and the interpreter ran it. When
     /// that is an FP instruction with a fast operation, the executor accepts it now, and
     /// the next compilation of the block has code for it.
+    #[inline]
     pub fn left_at(&mut self, block: &Block, index: usize) {
         let compilations = block.fp_compilations.get();
         if block.steps[index].op.is_fp() && block.admitted[index].get() != 0 && compilations < MAX_FP_COMPILATIONS {
@@ -1709,6 +1767,7 @@ impl Jit {
 
     /// The table of the compiled code for the guest addresses of one address space.
     /// `stamp` changes when an address can have other code.
+    #[inline]
     pub fn jumps(&mut self, space: usize, stamp: (u64, u64)) -> *mut Jump {
         let stamp = (stamp.0, stamp.1, self.generation);
         if self.tables.len() <= space {
@@ -1731,6 +1790,7 @@ impl Jit {
     /// `jumps` is from `Jit::jumps`, and `code` is from `Jit::code` for the page of
     /// `address` and for a block that is in the memory of the guest at this address in
     /// the address space of the table.
+    #[inline]
     pub unsafe fn set_jump(&mut self, jumps: *mut Jump, address: u32, code: usize) {
         // SAFETY: the table has 1 << JUMP_BITS entries.
         unsafe { *jumps.add((address >> 1) as usize & ((1 << JUMP_BITS) - 1)) = Jump { key: address, code } };

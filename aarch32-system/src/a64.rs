@@ -97,6 +97,25 @@ pub const V_EOR: u32 = 0x2e20_1c00;
 pub const V_BSL: u32 = 0x2e60_1c00;
 pub const V_BIT: u32 = 0x2ea0_1c00;
 pub const V_BIF: u32 = 0x2ee0_1c00;
+/// ST3 and ST4 of registers in sequence at the address in a register, with no offset.
+/// The element size goes to bit 10.
+pub const V_ST3: u32 = 0x0c00_4000;
+pub const V_ST4: u32 = 0x0c00_0000;
+/// Makes them LD3 and LD4.
+pub const V_STRUCTURE_LOAD: u32 = 1 << 22;
+/// A 32-bit core register to the 4 elements of a 128-bit register.
+pub const V_DUP_WORD: u32 = 0x4e04_0c00;
+/// The largest of the 4 elements of 32 bits, to the low element.
+pub const V_UMAXV_WORDS: u32 = 0x6eb0_a800;
+/// The low 32 bits of an FP register to a core register.
+pub const FMOV_TO_CORE: u32 = 0x1e26_0000;
+/// FABS of 4 single-precision elements.
+pub const V_FABS: u32 = 0x4ea0_f800;
+pub const V_CMTST: u32 = 0x0e20_8c00;
+// Compares of single-precision elements.
+pub const V_FCMEQ: u32 = 0x0e20_e400;
+pub const V_FCMGE: u32 = 0x2e20_e400;
+pub const V_FCMGT: u32 = 0x2ea0_e400;
 /// NOT of one register.
 pub const V_NOT: u32 = 0x2e20_5800;
 /// SQADD and UQADD.

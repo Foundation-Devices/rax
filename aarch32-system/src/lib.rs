@@ -11,8 +11,11 @@ use rax::arm::execution::{add_with_carry, decode_imm_shift};
 use rax::arm::vfp::{self, Fpscr, VfpState};
 use rax::arm::{Armv7Cpu, DecodedInsn, Decoder, ExecutionState, Mnemonic, Psr};
 
+// With no compiler, the code that makes its entry and exit code has no use.
+#[cfg_attr(not(all(feature = "jit", target_arch = "aarch64", target_os = "macos")), allow(dead_code))]
 mod a64;
 pub mod cache;
+#[cfg_attr(not(all(feature = "jit", target_arch = "aarch64", target_os = "macos")), allow(dead_code))]
 pub mod jit;
 pub mod tlb;
 #[cfg(test)]
@@ -308,6 +311,14 @@ enum Op {
     /// `align` is the alignment in bytes that the encoding asks for.
     SimdLoad { d: u8, count: u8, rn: u8, rm: u8, align: u8 },
     SimdStore { d: u8, count: u8, rn: u8, rm: u8, align: u8 },
+    /// VLD3, VST3, VLD4 and VST4 of all the elements of 3 or 4 D registers, `spacing`
+    /// apart. `size` is the log2 of the bytes of an element; `rm` and `align` are those
+    /// of SimdLoad.
+    SimdStructure { load: bool, d: u8, registers: u8, spacing: u8, size: u8, rn: u8, rm: u8, align: u8 },
+    /// VCEQ, VCGE and VCGT of single-precision elements. The fast operation is for
+    /// operands with no NaN and no denormal number: these have exceptions and the
+    /// flush to zero of the standard FPSCR value.
+    SimdFloatCompare { kind: SimdLane, quad: bool, d: u8, n: u8, m: u8 },
     /// VMOV of an immediate: the value is at `constant` in the constants of the block.
     SimdImmediate { quad: bool, d: u8, constant: u16 },
     /// VLDM, VSTM, VPUSH and VPOP of `count` D registers. `decrement` is the form that
@@ -342,6 +353,8 @@ impl Op {
                 | Op::SimdLane { .. }
                 | Op::SimdLoad { .. }
                 | Op::SimdStore { .. }
+                | Op::SimdStructure { .. }
+                | Op::SimdFloatCompare { .. }
                 | Op::SimdImmediate { .. }
                 | Op::FpLoadMultiple { .. }
                 | Op::FpStoreMultiple { .. }
@@ -1066,6 +1079,35 @@ fn executor_insn(insn: &DecodedInsn) -> DecodedInsn {
 /// VLD1 or VST1 of full registers, in its T32 encoding.
 fn thumb_simd_memory(insn: &DecodedInsn) -> Op {
     let raw = insn.raw;
+    let structure = match bits(raw, 8, 4) {
+        0b0000 => Some((4, 1)),
+        0b0001 => Some((4, 2)),
+        0b0100 => Some((3, 1)),
+        0b0101 => Some((3, 2)),
+        _ => None,
+    };
+    if let Some((registers, spacing)) = structure {
+        let d = (bits(raw, 22, 1) << 4 | bits(raw, 12, 4)) as u8;
+        let (rn, rm, size) = (reg(raw, 16), reg(raw, 0), bits(raw, 6, 2) as u8);
+        let load = raw & 0x20_0000 != 0;
+        let known = matches!(
+            (insn.mnemonic, load, registers),
+            (Mnemonic::VLD4, true, 4) | (Mnemonic::VST4, false, 4) | (Mnemonic::VLD3, true, 3) | (Mnemonic::VST3, false, 3)
+        );
+        // The alignments of 128 and 256 bits are only for 4 registers.
+        let align = match (bits(raw, 4, 2), registers) {
+            (0, _) => 1,
+            (1, _) => 8,
+            (field, 4) => 4 << field,
+            _ => return Op::Slow,
+        };
+        let defined = raw & 0xff90_0000 == 0xf900_0000 && known && size != 3 && d + (registers - 1) * spacing <= 31;
+        return if defined && rn != PC {
+            Op::SimdStructure { load, d, registers, spacing, size, rn, rm, align }
+        } else {
+            Op::Slow
+        };
+    }
     let count = match bits(raw, 8, 4) {
         0b0111 => 1,
         0b1010 => 2,
@@ -1269,6 +1311,15 @@ fn simd(insn: &DecodedInsn, raw: u32, constants: &mut Vec<u64>) -> Op {
     if let Some(op) = simd_lane(insn, raw, quad, d, n, m) {
         return op;
     }
+    if raw & 0xfe90_0f10 == 0xf200_0e00 && !(quad && (d | n | m) & 1 != 0) {
+        let kind = match (insn.mnemonic, raw & 0x0100_0000 != 0, raw & 0x0020_0000 != 0) {
+            (Mnemonic::VCEQ, false, false) => SimdLane::Ceq,
+            (Mnemonic::VCGE, true, false) => SimdLane::Cge,
+            (Mnemonic::VCGT, true, true) => SimdLane::Cgt,
+            _ => return Op::Slow,
+        };
+        return Op::SimdFloatCompare { kind, quad, d, n, m };
+    }
     if insn.mnemonic == Mnemonic::VMVN && raw & 0xffb3_0f90 == 0xf3b0_0580 && !(quad && (d | m) & 1 != 0) {
         return Op::SimdLogic { kind: SimdLogic::Not, quad, d, n: m, m };
     }
@@ -1449,6 +1500,7 @@ const FPSCR_STATUS: u32 = 0xf800_009f;
 /// A number for the state of the controls that decide how the executor runs a VFP
 /// instruction. 0 when short vectors or trapped exceptions are on: the fast
 /// interpreter has no operation for these.
+#[inline]
 pub fn fp_controls(cpu: &Armv7Cpu) -> u64 {
     let fpscr = cpu.vfp.fpscr.bits();
     if fpscr & (FPSCR_LENGTH_AND_STRIDE | FPSCR_TRAP_ENABLES) != 0 {
@@ -1695,17 +1747,20 @@ impl Block {
 
     /// Tells the block that the executor completed the instruction `index` with no
     /// exception, in the state `controls` of the FP controls before and after it.
+    #[inline]
     pub fn set_admitted(&self, index: usize, controls: u64) {
         self.admitted[index].set(controls);
     }
 
     /// True when the FP access checks of the executor pass for the instruction `index`
     /// in the state `controls` of the FP controls.
+    #[inline]
     pub fn is_admitted(&self, index: usize, controls: u64) -> bool {
         controls != 0 && self.admitted[index].get() == controls
     }
 
     /// The instruction `index` in the form that the executor runs with the least work.
+    #[inline]
     pub fn executor_insn(&self, index: usize) -> &DecodedInsn {
         &self.executor_insns[index]
     }
@@ -1714,29 +1769,35 @@ impl Block {
         &self.insns
     }
 
+    #[inline]
     pub fn len(&self) -> usize {
         self.steps.len()
     }
 
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.steps.is_empty()
     }
 
     /// True when the interpreter has an operation for the instruction `index`.
+    #[inline]
     pub fn has_fast_operation(&self, index: usize) -> bool {
         self.steps[index].op != Op::Slow
     }
 
+    #[inline]
     pub fn is_thumb(&self) -> bool {
         self.thumb
     }
 
     /// The offset in the page of the instruction `index`, or of the end of the block.
+    #[inline]
     pub fn offset(&self, index: usize) -> u32 {
         self.steps.get(index).map_or(self.end_offset, |step| step.offset).into()
     }
 
     /// ITSTATE before the instruction `index`, or after the last instruction.
+    #[inline]
     pub fn it_state(&self, index: usize) -> u8 {
         self.steps.get(index).map_or(self.end_it_state, |step| step.it_state)
     }
@@ -2079,6 +2140,79 @@ impl Block {
                         PC => {}
                         SP => r!(rn) = base.wrapping_add(u32::from(count) * 8),
                         _ => r!(rn) = base.wrapping_add(r!(rm)),
+                    }
+                    None
+                }
+                Op::SimdStructure { load, d, registers, spacing, size, rn, rm, align } => {
+                    // Only direct accesses, as for SimdLoad and SimdStore.
+                    let base = r!(rn);
+                    if base % u32::from(align) != 0 {
+                        break Exit::Slow(index);
+                    }
+                    let (registers, element) = (usize::from(registers), 1usize << size);
+                    let register = |number: usize| d + number as u8 * spacing;
+                    // The element `lane` of the register `number` is at this place in the memory.
+                    let place = |number: usize, lane: usize| (lane * registers + number) * element;
+                    let mut bytes = [0u8; 32];
+                    if load {
+                        for (chunk, part) in bytes.chunks_mut(8).enumerate().take(registers) {
+                            let Some(loaded) = memory.load::<8>(base.wrapping_add(chunk as u32 * 8)) else {
+                                break 'run Exit::Slow(index);
+                            };
+                            part.copy_from_slice(&loaded);
+                        }
+                        for number in 0..registers {
+                            let mut value = [0u8; 8];
+                            for lane in 0..8 / element {
+                                value[lane * element..][..element].copy_from_slice(&bytes[place(number, lane)..][..element]);
+                            }
+                            cpu.vfp.write_d_bits(register(number), u64::from_le_bytes(value));
+                        }
+                    } else {
+                        for number in 0..registers {
+                            let value = cpu.vfp.read_d_bits(register(number)).to_le_bytes();
+                            for lane in 0..8 / element {
+                                bytes[place(number, lane)..][..element].copy_from_slice(&value[lane * element..][..element]);
+                            }
+                        }
+                        for (chunk, part) in bytes.chunks(8).enumerate().take(registers) {
+                            if !memory.store::<8>(base.wrapping_add(chunk as u32 * 8), part.try_into().unwrap()) {
+                                break 'run Exit::Slow(index);
+                            }
+                        }
+                    }
+                    match rm {
+                        PC => {}
+                        SP => r!(rn) = base.wrapping_add(registers as u32 * 8),
+                        _ => r!(rn) = base.wrapping_add(r!(rm)),
+                    }
+                    None
+                }
+                Op::SimdFloatCompare { kind, quad, d, n, m } => {
+                    let fp = &mut cpu.vfp;
+                    let mut results = [0u64; 2];
+                    for half in 0..=u8::from(quad) {
+                        let (a, b) = (fp.read_d_bits(n + half), fp.read_d_bits(m + half));
+                        for lane in 0..2 {
+                            let (x, y) = ((a >> (lane * 32)) as u32, (b >> (lane * 32)) as u32);
+                            let plain = |bits: u32| {
+                                let magnitude = bits & 0x7fff_ffff;
+                                magnitude == 0 || (0x0080_0000..=0x7f80_0000).contains(&magnitude)
+                            };
+                            if !plain(x) || !plain(y) {
+                                break 'run Exit::Slow(index);
+                            }
+                            let (x, y) = (f32::from_bits(x), f32::from_bits(y));
+                            let holds = match kind {
+                                SimdLane::Ceq => x == y,
+                                SimdLane::Cge => x >= y,
+                                _ => x > y,
+                            };
+                            results[usize::from(half)] |= u64::from(if holds { u32::MAX } else { 0 }) << (lane * 32);
+                        }
+                    }
+                    for half in 0..=u8::from(quad) {
+                        fp.write_d_bits(d + half, results[usize::from(half)]);
                     }
                     None
                 }

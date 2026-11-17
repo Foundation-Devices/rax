@@ -117,7 +117,7 @@ fn executor_step(cpu: &mut Armv7Cpu, memory: &mut FlatMemory, insn: &DecodedInsn
 
 /// T32 encodings of the groups that have fast operations: the fixed bits, the random
 /// bits, and true when the two copies of Rm must be equal.
-const WIDE_TEMPLATES: [(u32, u32, bool); 45] = [
+const WIDE_TEMPLATES: [(u32, u32, bool); 48] = [
     (0xf000_0000, 0x07ff_ffff, false),
     (0xf000_0000, 0x07ff_ffff, false),
     (0xe800_0000, 0x01ff_ffff, false),
@@ -166,6 +166,10 @@ const WIDE_TEMPLATES: [(u32, u32, bool); 45] = [
     (0xf3bf_8f40, 0x0000_003f, false),
     (0xf900_0000, 0x00ef_ffff, false),
     (0xffb0_0580, 0x0040_f06f, false),
+    // VLD3, VST3, VLD4, VST4, and the compares of single-precision elements.
+    (0xf900_0000, 0x0064_f1ff, false),
+    (0xf900_0400, 0x0064_f1df, false),
+    (0xef00_0e00, 0x106f_f0ef, false),
 ];
 
 /// A32 encodings of the groups that have fast operations: the fixed bits and the random bits.
@@ -535,9 +539,9 @@ fn fast_interpreter_agrees_with_executor_on_random_code() {
         "Clz", "CompareBranch", "Extend", "FpAccumulate", "FpBinary", "FpCompare", "FpConvert", "FpFlags",
         "FpFromCore", "FpFromCorePair", "FpImmediate", "FpLoad", "FpLoadLiteral", "FpLoadMultiple", "FpStore", "FpStoreMultiple", "FpToCore", "FpToCorePair", "FpUnary",
         "It", "Load", "LoadLiteral", "LoadMultiple", "LoadPair", "LoadReg", "Mla", "Mls", "Movt",
-        "Mul", "Nop", "Pop", "Push", "Rbit", "Rev", "Sbfx", "Sdiv", "ShiftReg", "SimdImmediate", "SimdLaneAdd", "SimdLaneAddl", "SimdLaneCeq", "SimdLaneCge", "SimdLaneCgt",
+        "Mul", "Nop", "Pop", "Push", "Rbit", "Rev", "Sbfx", "Sdiv", "ShiftReg", "SimdFloatCompare", "SimdImmediate", "SimdLaneAdd", "SimdLaneAddl", "SimdLaneCeq", "SimdLaneCge", "SimdLaneCgt",
         "SimdLaneClt0", "SimdLaneMla", "SimdLaneMls", "SimdLaneMovl", "SimdLaneMul", "SimdLaneMull", "SimdLaneQadd",
-        "SimdLaneQmovn", "SimdLaneQsub", "SimdLaneRshr", "SimdLaneRshrn", "SimdLaneShr", "SimdLaneSub", "SimdLoad", "SimdLogic", "SimdStore", "Smull", "Store", "StoreMultiple", "StorePair",
+        "SimdLaneQmovn", "SimdLaneQsub", "SimdLaneRshr", "SimdLaneRshrn", "SimdLaneShr", "SimdLaneSub", "SimdLoad", "SimdLogic", "SimdStore", "SimdStructure", "Smull", "Store", "StoreMultiple", "StorePair",
         "StoreReg", "TableBranch", "Ubfx", "Udiv", "Umaal", "Umlal", "Umull",
     ];
     assert_eq!(covered, all);
@@ -554,10 +558,11 @@ fn fast_interpreter_agrees_with_executor_on_random_code() {
         "FpConvert", "FpFlags", "FpFromCore", "FpFromCorePair", "FpImmediate", "FpLoad", "FpLoadLiteral",
         "FpLoadMultiple", "FpStore", "FpStoreMultiple", "FpToCore", "FpToCorePair", "FpUnary", "It", "Load",
         "LoadLiteral", "LoadMultiple", "LoadPair", "LoadReg", "Mla", "Mls", "Movt", "Mul", "Nop", "Pop", "Push",
-        "Rbit", "Rev", "Sbfx", "Sdiv", "ShiftReg", "SimdImmediate", "SimdLaneAdd", "SimdLaneAddl", "SimdLaneCeq",
+        "Rbit", "Rev", "Sbfx", "Sdiv", "ShiftReg", "SimdFloatCompare", "SimdImmediate", "SimdLaneAdd", "SimdLaneAddl", "SimdLaneCeq",
         "SimdLaneCge", "SimdLaneCgt", "SimdLaneClt0", "SimdLaneMla", "SimdLaneMls", "SimdLaneMovl", "SimdLaneMul",
         "SimdLaneMull", "SimdLaneQadd", "SimdLaneQmovn", "SimdLaneQsub", "SimdLaneRshr", "SimdLaneRshrn",
-        "SimdLaneShr", "SimdLaneSub", "SimdLoad", "SimdLogic", "SimdStore", "Smull", "Store", "StoreMultiple",
+        "SimdLaneShr", "SimdLaneSub", "SimdLoad", "SimdLogic", "SimdStore", "SimdStructure", "Smull", "Store",
+        "StoreMultiple",
         "StorePair", "StoreReg", "TableBranch", "Ubfx", "Udiv", "Umaal", "Umlal", "Umull",
     ];
     assert_eq!(covered, all);
