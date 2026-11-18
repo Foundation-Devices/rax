@@ -15,8 +15,9 @@ its memory and its time to the engine through the interfaces below.
 | `src/lib.rs` | `Block`: the decoded instructions of one page from an entry address, to an instruction that always leaves (64 at most). `Block::run`: the fast interpreter for the common Thumb, A32, VFP and Advanced SIMD operations. |
 | `src/cache.rs` | `BlockCache`: the blocks by their place in the memory of the machine, links from virtual addresses, removal of the blocks of a written page. |
 | `src/tlb.rs` | `Tlb`: a software TLB with one set of entries for each MMU configuration (an address space change keeps the entries). An entry can be direct: the access goes to host memory with no call. |
-| `src/jit.rs` | `Jit`: a compiler from hot blocks to AArch64 code. Feature `jit` (default), AArch64 macOS and Linux hosts. |
-| `src/a64.rs` | The AArch64 assembler of the compiler. |
+| `src/jit.rs` | `Jit`: a compiler from hot blocks to the code of the host. Feature `jit` (default); AArch64 macOS, AArch64 Linux and x86-64 Linux hosts. This file has the part that is the same for each host: the blocks with code, the branches between the code of one page, the table of the jumps, the flags that an instruction must keep. |
+| `src/jit/aarch64.rs`, `src/a64.rs` | The code generator for AArch64 and its assembler. |
+| `src/jit/x86_64.rs`, `src/x64.rs` | The code generator for x86-64 (System V calling convention) and its assembler. |
 
 ## Interface
 
@@ -57,11 +58,23 @@ its `machine.rs` and `bus.rs` show the calls in order.
 
 ## How the compiled code keeps the state exact
 
-Guest r0 to r14 are host x0 to x14 and the guest flags are the host flags. The code has only
-the cases that need no call: an access through a direct TLB entry, a shift amount below
+On AArch64, guest r0 to r14 are host x0 to x14 and the guest flags are the host flags. On
+x86-64, r0 to r6, r8, r11 and the SP are in host registers and the other registers are in
+the CPU state; the guest flags are in RAX in the form of LAHF and SETO (N, Z and C in AH,
+with C and not the borrow of x86; V in AL). The flags of the host are a copy of them only
+from the instruction that made them to the next instruction that changes the flags of the
+host, and the code generator knows which flags the copy has: a condition reads the copy,
+or loads the flags from RAX first.
+
+The code has only the cases that need no call: an access through a direct TLB entry, a shift amount below
 32, VFP arithmetic with round to nearest and no flush to zero or default NaN, the FP
 controls of the compilation. For each other case it leaves before the instruction, with the
-registers as before it. The start of a block subtracts its length from the budget, and
+registers as before it. On x86-64 the VFP arithmetic is that of SSE, and the code leaves
+before the instruction after a result that is not sure to be the result of the guest with
+its flags: a NaN, an infinity, a denormal number or one with the smallest exponent, an
+invalid operation, an underflow, a conversion out of the range of 32 bits. Of the Advanced
+SIMD operations on elements, x86-64 has code (SSE2) only for VADD, VSUB, VCEQ, VCGT, VSHR
+and the compares of FP numbers; the interpreter runs the others and VLD3/VLD4/VST3/VST4. The start of a block subtracts its length from the budget, and
 each exit in the block adds back the instructions that did not run.
 
 ## Tests
@@ -71,8 +84,8 @@ All the commands are for the directory of rax. The tests are in `src/tests.rs`,
 
 ### Quick tier
 
-`cargo test --release -p rax-aarch32-system`: 39 tests in about 30 s on an Apple
-M-series host (110 s of CPU time). `--no-default-features` runs the same tests with no
+`cargo test --release -p rax-aarch32-system`: 41 tests in about 30 s on an Apple
+M-series host (110 s of CPU time); 40 on an x86-64 host, where `tests/fp.rs` has no model. `--no-default-features` runs the same tests with no
 compiler, as on another host. The dev profile passes too (its overflow checks see what
 a release build does not): there `RAX_SOAK_SECONDS=40` gives each random test a time
 that its count of cases does not.
@@ -95,9 +108,10 @@ write moves the next event.
 | `tests/memory.rs` | Loads and stores against a model: each addressing mode with its writeback, LDRD and STRD, LDM and STM in the four orders, PUSH and POP, the 16-bit forms, loads from the PC, loads of the PC, the alignment rules. |
 | `tests/fp.rs` | VFP instructions against the FP unit of an AArch64 host: arithmetic, fused and not fused multiply-add, compares, conversions with integers and fixed-point numbers, with each rounding mode, flush to zero, default NaN, NaN and denormal operands, and the FPSCR flags. |
 | `tests/neon.rs` | Advanced SIMD instructions on integer elements against a model: 28 operations with three registers of the same length, 16 shifts by an immediate value, 16 operations with two lengths, 26 operations with two registers; each size, D and Q, with QC. |
-| `tests/system.rs` | Each condition with each value of the flags, IT blocks of each shape, the state at each exception entry and after each return, the registers of each mode, MRS and MSR with each field mask. |
+| `tests/system.rs` | Each condition with each value of the flags, and in compiled code after each kind of instruction that gives flags, IT blocks of each shape, the state at each exception entry and after each return, the registers of each mode, MRS and MSR with each field mask. |
 | `tests/corrections.rs` | The cases of the faults that these tests found in the `Executor`. |
 | `a64.rs` | Each instruction of the assembler against the word that clang gives for its text; each of the 1302 logical immediates of 32 bits. |
+| `x64.rs` | Each instruction of the x86-64 assembler against the bytes that clang gives for its text. |
 
 ### Soak tier
 
@@ -125,11 +139,16 @@ instructions, UART text, pictures) and with QEMU.
 
 ## Limits
 
-- The compiler is for AArch64 macOS (MAP_JIT) and AArch64 Linux (the code pages are
-  writable only for the time of a write). Other hosts have the interpreter only.
+- The compiler is for AArch64 macOS (MAP_JIT), AArch64 Linux and x86-64 Linux (the code
+  pages are writable only for the time of a write). Other hosts have the interpreter only.
   Checked: `cargo zigbuild --tests` for the musl and gnu targets of AArch64 and x86-64
   Linux and for `x86_64-pc-windows-gnu`; a run of the two musl test binaries in a Linux
-  AArch64 container (the x86-64 one under emulation). The Windows build was not run.
+  AArch64 container. The Windows build was not run.
+- No x86-64 processor ran the code generator for x86-64: the tests ran in a linux/amd64
+  container on Apple Silicon, where Rosetta translates the code. Rosetta has the FP rules
+  of AArch64 in some places where a processor has other rules (the sign of the default
+  NaN, the time of the underflow test, no flag for a denormal operand). The compiled FP
+  code leaves in each such case, but only a run on a processor can show that.
 - Compiled code is for one virtual page of one physical page; a second virtual address of
   the same code compiles it again.
 - ARMv7-A without LPAE, big-endian data, ThumbEE or Jazelle. Short vectors and trapped FP
