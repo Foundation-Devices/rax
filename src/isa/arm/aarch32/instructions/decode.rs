@@ -336,11 +336,14 @@ impl<'a, M: ArmMemory> Executor<'a, M> {
             let m = (insn.raw & 0xF) as usize;
             let shift_type = ShiftType::from_bits(((insn.raw >> 5) & 3) as u8);
             let imm5 = ((insn.raw >> 7) & 0x1F) as u32;
-            let shift_amount = match shift_type {
-                ShiftType::LSR | ShiftType::ASR if imm5 == 0 => 32,
-                _ => imm5,
+            let (shift_type, shift_amount) = match shift_type {
+                ShiftType::LSR | ShiftType::ASR if imm5 == 0 => (shift_type, 32),
+                // type==ROR with imm5==0 encodes RRX, which shifts the carry
+                // flag in.
+                ShiftType::ROR if imm5 == 0 => (ShiftType::RRX, 1),
+                _ => (shift_type, imm5),
             };
-            shift_c(self.reg(m), shift_type, shift_amount, false).0
+            shift_c(self.reg(m), shift_type, shift_amount, self.cpu.cpsr.c).0
         } else {
             insn.raw & 0xFFF
         };
