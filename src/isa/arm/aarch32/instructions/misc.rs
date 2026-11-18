@@ -994,7 +994,9 @@ impl<'a, M: ArmMemory> Executor<'a, M> {
             let op1 = (raw >> 20) & 0x7; // hw1[6:4]
             let nt = (raw >> 5) & 1 != 0;
             let mt = (raw >> 4) & 1 != 0;
-            if op1 == 0b001 {
+            if (raw >> 23) & 1 != 0 {
+                (3, nt, mt) // SMLAL, in the long multiply group (RdHi=rd, RdLo=ra)
+            } else if op1 == 0b001 {
                 (if ra == 15 { 4 } else { 0 }, nt, mt) // SMUL / SMLA
             } else {
                 (if ra == 15 { 2 } else { 1 }, false, mt) // SMULW / SMLAW

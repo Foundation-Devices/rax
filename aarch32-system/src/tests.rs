@@ -15,6 +15,7 @@ const CODE_PAGE: u32 = MEMORY_BASE + 0x7000;
 const PAGE_SIZE: usize = 0x1000;
 
 mod blocks;
+mod corrections;
 mod engine;
 mod machine;
 mod programs;

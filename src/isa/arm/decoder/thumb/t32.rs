@@ -872,6 +872,13 @@ impl ThumbDecoder {
         let rd_hi = ((hw2 >> 8) & 0xF) as u8;
         let rm = (hw2 & 0xF) as u8;
 
+        // SMLAL<x><y>: op1=100 with op2=10xx (exec reads T32 raw).
+        if op1 == 0b100 && (op2 & 0xC) == 0x8 {
+            return Ok(
+                DecodedInsn::new(Mnemonic::A32_HMUL, ExecutionState::Thumb2, raw, 4)
+                    .with_operand(Operand::Reg(Self::any_reg(rd_lo))),
+            );
+        }
         // UMAAL / SMLALD / SMLSLD use the umbrella mnemonics (exec reads T32 raw).
         // SMLALD/SMLSLD: op1=100/101 with op2=110x. UMAAL: op1=110, op2=0110.
         if (op1 == 0b100 || op1 == 0b101) && (op2 & 0xE) == 0xC {
