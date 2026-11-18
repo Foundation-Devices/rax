@@ -141,3 +141,23 @@ fn vhsub_of_unsigned_elements_keeps_the_sign_of_the_difference() {
     assert_eq!(outcome.dregs[0], 0xf8ff_0080_007f_ffff);
     assert_eq!(outcome.stop, None);
 }
+
+#[test]
+fn vqdmlal_saturates_the_doubled_product_before_the_sum() {
+    let mut trio = Trio::new();
+    // VQDMLAL.S16 q0, d2, d3.
+    let program = arm_program(&[0xf292_0903]);
+    let mut case = Case::new(&mut Random(18), false);
+    let d = &mut case.cpu.vfp.dregs;
+    // -1 + 2 * 0x8000 * 0x8000, and 5 + 2 * 3 * 2.
+    (d[0], d[1], d[2], d[3]) = (0x0000_0005_ffff_ffff, 0, 0x0003_8000, 0x0002_8000);
+    case.cpu.vfp.fpscr = rax::arm::vfp::Fpscr::from_bits(0);
+    case.load(&program);
+    case.enter(&program);
+    case.until = 1;
+    let outcome = run(&mut trio, &case);
+    assert_eq!(outcome.dregs[..2], [0x0000_0011_7fff_fffe, 0]);
+    // QC.
+    assert_eq!(outcome.fpscr, 1 << 27);
+    assert_eq!(outcome.stop, None);
+}

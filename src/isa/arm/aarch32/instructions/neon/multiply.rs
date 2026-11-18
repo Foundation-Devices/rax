@@ -334,7 +334,13 @@ impl<'a, M: ArmMemory> Executor<'a, M> {
                 lhs * rhs
             };
             if saturating_doubling {
-                product <<= 1;
+                // The doubled product has its own saturation, before the sum.
+                let (doubled, saturated) =
+                    Self::neon_signed_saturate_i128(product << 1, wide_bits);
+                if saturated {
+                    self.cpu.vfp.fpscr.set_qc(true);
+                }
+                product = doubled;
             }
             let acc = if unsigned {
                 d_elem as i128
