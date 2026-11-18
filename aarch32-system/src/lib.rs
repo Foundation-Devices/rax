@@ -35,6 +35,9 @@ pub mod jit;
 #[cfg(test)]
 mod tests;
 pub mod tlb;
+// No code generator uses this assembler.
+#[allow(dead_code)]
+mod x64;
 
 pub const MAX_INSTRUCTIONS: usize = 64;
 pub const PAGE_SIZE: usize = 4096;
