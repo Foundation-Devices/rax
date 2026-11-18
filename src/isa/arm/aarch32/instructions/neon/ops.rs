@@ -817,7 +817,9 @@ impl<'a, M: ArmMemory> Executor<'a, M> {
                     let value = match insn.mnemonic {
                         Mnemonic::VHADD => (lhs + rhs) >> 1,
                         Mnemonic::VRHADD => (lhs + rhs + 1) >> 1,
-                        Mnemonic::VHSUB => ((lhs.wrapping_sub(rhs)) & mask) >> 1,
+                        // The difference has a sign: its bit above the element
+                        // is the top bit of the result.
+                        Mnemonic::VHSUB => ((lhs as i64 - rhs as i64) >> 1) as u64 & mask,
                         _ => return ExecResult::Undefined,
                     };
                     value

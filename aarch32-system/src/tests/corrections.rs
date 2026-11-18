@@ -112,3 +112,19 @@ fn a32_register_offset_with_rrx_shifts_the_carry_in() {
     assert_eq!(outcome.regs[4], (DATA + 0x200).wrapping_add(0x8000_0020));
     assert_eq!(outcome.stop, None);
 }
+
+#[test]
+fn vhsub_of_unsigned_elements_keeps_the_sign_of_the_difference() {
+    let mut trio = Trio::new();
+    // VHSUB.U8 d0, d1, d2.
+    let program = arm_program(&[0xf301_0202]);
+    let mut case = Case::new(&mut Random(17), false);
+    case.cpu.vfp.dregs[1] = 0x1000_0500_80ff_0100;
+    case.cpu.vfp.dregs[2] = 0x2001_05ff_7f00_0201;
+    case.load(&program);
+    case.enter(&program);
+    case.until = 1;
+    let outcome = run(&mut trio, &case);
+    assert_eq!(outcome.dregs[0], 0xf8ff_0080_007f_ffff);
+    assert_eq!(outcome.stop, None);
+}
