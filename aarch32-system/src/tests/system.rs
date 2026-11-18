@@ -2,6 +2,7 @@
 //! mode, against the rules of the ARM architecture manual.
 
 use rax::arm::Psr;
+use rax::arm::execution::add_with_carry;
 
 use super::Random;
 use super::corrections::{arm_program, run, thumb_program, vectors_that_stop};
@@ -103,6 +104,110 @@ fn each_condition_with_each_value_of_the_flags() {
             }
         }
     }
+}
+
+/// N, Z, C and V in the bits 3:0, from a result with its carry and its overflow.
+fn flags_of(result: u32, carry: bool, overflow: bool) -> u32 {
+    (result >> 31) << 3 | u32::from(result == 0) << 2 | u32::from(carry) << 1 | u32::from(overflow)
+}
+
+fn sum_flags(first: u32, second: u32, carry: u32) -> u32 {
+    let (result, carry, overflow) = add_with_carry(first, second, carry);
+    flags_of(result, carry, overflow)
+}
+
+#[test]
+fn compiled_conditions_with_the_flags_of_each_kind_of_instruction() {
+    const OPERANDS: [(u32, u32); 8] = [
+        (0, 0),
+        (1, 2),
+        (2, 1),
+        (0x7fff_ffff, 1),
+        (0x8000_0000, 0x8000_0000),
+        (0xffff_ffff, 1),
+        (0x8000_0000, 1),
+        (5, 5),
+    ];
+    // An instruction that gives the flags (or none: the flags of the entry), and the
+    // flags after it from the operands and the flags before it.
+    type Flags = fn(u32, u32, u32) -> u32;
+    let sources: [(Option<u32>, Flags); 7] = [
+        (None, |_, _, entry| entry),
+        // CMP r4, r5
+        (Some(0xe154_0005), |first, second, _| {
+            sum_flags(first, !second, 1)
+        }),
+        // CMN r4, r5
+        (Some(0xe174_0005), |first, second, _| {
+            sum_flags(first, second, 0)
+        }),
+        // TST r4, r5
+        (Some(0xe114_0005), |first, second, entry| {
+            flags_of(first & second, entry & 2 != 0, entry & 1 != 0)
+        }),
+        // MOVS r6, r4, LSL #1
+        (Some(0xe1b0_6084), |first, _, entry| {
+            flags_of(first << 1, first >> 31 != 0, entry & 1 != 0)
+        }),
+        // ADCS r6, r4, r5
+        (Some(0xe0b4_6005), |first, second, entry| {
+            sum_flags(first, second, entry >> 1 & 1)
+        }),
+        // SBCS r6, r4, r5
+        (Some(0xe0d4_6005), |first, second, entry| {
+            sum_flags(first, !second, entry >> 1 & 1)
+        }),
+    ];
+    let mut trio = Trio::new();
+    let mut random = Random(13);
+    for cond in 0..15 {
+        for (source, flags_after) in sources {
+            for entry in 0..16 {
+                for (number, (first, second)) in OPERANDS.into_iter().enumerate() {
+                    // The flags of the entry have no use for some instructions, and the
+                    // operands have none with no instruction.
+                    if (source.is_none() && number != 0) || (source.is_some() && entry > 3) {
+                        continue;
+                    }
+                    for with_add in [false, true] {
+                        let flags = flags_after(first, second, entry);
+                        let passed = u32::from(condition_passed(cond, flags));
+                        // The instruction of the flags; ADD r1, r1, r8, which keeps the
+                        // flags; MOV r0, #1 and a branch over MOV r2, #1, each with the
+                        // condition; MOV r3, #1.
+                        let mut words: Vec<u32> = source.into_iter().collect();
+                        if with_add {
+                            words.push(0xe081_1008);
+                        }
+                        words.extend([
+                            cond << 28 | 0x03a0_0001,
+                            cond << 28 | 0x0a00_0000,
+                            0xe3a0_2001,
+                            0xe3a0_3001,
+                        ]);
+                        let program = arm_program(&words);
+                        let mut case = Case::new(&mut random, false);
+                        case.cpu.regs[..4].fill(0);
+                        (case.cpu.regs[4], case.cpu.regs[5]) = (first, second);
+                        set_flags(&mut case, entry);
+                        case.load(&program);
+                        case.enter(&program);
+                        // The block has all the stops after the program.
+                        case.until = 100;
+                        case.eager = true;
+                        let outcome = run(&mut trio, &case);
+                        let name = format!(
+                            "{cond} after {source:x?} of {first:#x} and {second:#x}, \
+                             flags {entry:#x} at the entry, ADD {with_add}"
+                        );
+                        assert_eq!(outcome.regs[..4], [passed, 0, 1 - passed, 1], "{name}");
+                        assert_eq!(outcome.cpsr >> 28, flags, "{name}");
+                    }
+                }
+            }
+        }
+    }
+    assert!(trio.compiled_share().is_none_or(|share| share > 0.8));
 }
 
 #[test]
