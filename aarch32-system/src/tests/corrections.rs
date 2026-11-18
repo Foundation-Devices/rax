@@ -3,6 +3,7 @@
 
 use super::Random;
 use super::machine::{Outcome, Stop};
+use super::programs::VECTORS;
 use super::suite::{CODE, Case, Insn, Program, Trio, t16, wide};
 
 pub fn run(trio: &mut Trio, case: &Case) -> Outcome {
@@ -15,6 +16,15 @@ pub fn thumb_program(insns: Vec<Insn>) -> Program {
         at: CODE + 0x100,
         insns,
     }
+}
+
+/// WFI at each vector: the machine stops with the state of the entry.
+pub fn vectors_that_stop(case: &mut Case) {
+    for vector in (0..0x20).step_by(4) {
+        case.ram.write_words(VECTORS + vector, &[0xe320_f003]);
+    }
+    case.cpu.cp15.vbar = VECTORS;
+    case.take_exceptions = true;
 }
 
 #[test]
@@ -50,4 +60,24 @@ fn bkpt_runs_in_an_it_block_with_a_false_condition() {
     let outcome = run(&mut trio, &case);
     assert_eq!(outcome.stop, Some(Stop::Exception("Breakpoint(0)".into())));
     assert_eq!((outcome.regs[1], outcome.regs[15]), (0, program.at + 2));
+}
+
+#[test]
+fn svc_in_an_it_block_returns_with_the_it_bits_of_the_next_instruction() {
+    let mut trio = Trio::new();
+    // ITE EQ; SVC 0; MOVS r2, #1 (not run: NE); MOVS r3, #1.
+    let program = thumb_program(vec![t16(0xbf0c), t16(0xdf00), t16(0x2201), t16(0x2301), t16(0xbe00)]);
+    let mut case = Case::new(&mut Random(14), true);
+    case.only_starts = false;
+    vectors_that_stop(&mut case);
+    // The SVC handler: MOVS pc, lr.
+    case.ram.write_words(VECTORS + 8, &[0xe1b0_f00e]);
+    case.cpu.regs[2..4].fill(0);
+    case.cpu.cpsr.z = true;
+    case.load(&program);
+    case.enter(&program);
+    case.until = 20;
+    let outcome = run(&mut trio, &case);
+    assert_eq!(outcome.regs[2..4], [0, 1]);
+    assert_eq!(outcome.stop, Some(Stop::Halt));
 }

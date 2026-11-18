@@ -632,6 +632,12 @@ impl<'a, M: ArmMemory> Executor<'a, M> {
         let target_mode = exception.target_mode();
         let vector_offset = exception.vector_offset();
 
+        // The return of an SVC goes to the next instruction: the saved CPSR has
+        // the IT bits of that one (ITAdvance in TakeSVCException).
+        if matches!(exception, ExceptionType::SupervisorCall(_)) {
+            self.cpu.cpsr.advance_it_state();
+        }
+
         // Save CPSR to SPSR of target mode
         let cpsr_value = self.cpu.cpsr.to_u32();
 
