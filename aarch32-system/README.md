@@ -73,8 +73,8 @@ registers as before it. On x86-64 the VFP arithmetic is that of SSE, and the cod
 before the instruction after a result that is not sure to be the result of the guest with
 its flags: a NaN, an infinity, a denormal number or one with the smallest exponent, an
 invalid operation, an underflow, a conversion out of the range of 32 bits. Of the Advanced
-SIMD operations on elements, x86-64 has code (SSE2) only for VADD, VSUB, VCEQ, VCGT, VSHR
-and the compares of FP numbers; the interpreter runs the others and VLD3/VLD4/VST3/VST4. The start of a block subtracts its length from the budget, and
+SIMD operations on elements, x86-64 has code (SSE2) only for VADD, VSUB, VCEQ, VCGT, VCLT
+with 0, VSHR, VMUL, VMLA and VMLS of 16-bit elements, and the compares of FP numbers; the interpreter runs the others and VLD3/VLD4/VST3/VST4. The start of a block subtracts its length from the budget, and
 each exit in the block adds back the instructions that did not run.
 
 ## Tests

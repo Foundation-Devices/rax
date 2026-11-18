@@ -186,7 +186,9 @@ fn is_fp_arithmetic(op: Op) -> bool {
 fn has_lane_code(kind: SimdLane, size: u8, unsigned: bool) -> bool {
     match kind {
         SimdLane::Add | SimdLane::Sub => true,
-        SimdLane::Ceq | SimdLane::Cgt => size < 3,
+        SimdLane::Ceq | SimdLane::Cgt | SimdLane::Clt0 => size < 3,
+        // SSE2 has the product of the elements of 16 bits only.
+        SimdLane::Mul | SimdLane::Mla | SimdLane::Mls => size == 1,
         SimdLane::Shr => unsigned || size == 1 || size == 2,
         _ => false,
     }
@@ -1785,7 +1787,7 @@ impl Compiler<'_> {
         else {
             unreachable!();
         };
-        if kind != SimdLane::Shr {
+        if !kind.has_one_operand() {
             self.simd_load(quad, X0, n);
         }
         self.simd_load(quad, X1, m);
@@ -1818,6 +1820,27 @@ impl Compiler<'_> {
                 }
                 self.asm.packed(x64::PCMPGT + size, X0, X1);
                 X0
+            }
+            SimdLane::Clt0 => {
+                self.asm.packed(x64::PXOR, X0, X0);
+                self.asm.packed(x64::PCMPGT + size, X0, X1);
+                X0
+            }
+            SimdLane::Mul => {
+                self.asm.packed(x64::PMULLW, X0, X1);
+                X0
+            }
+            SimdLane::Mla => {
+                self.asm.packed(x64::PMULLW, X0, X1);
+                self.simd_load(quad, X1, d);
+                self.asm.packed(x64::PADD + size, X0, X1);
+                X0
+            }
+            SimdLane::Mls => {
+                self.asm.packed(x64::PMULLW, X0, X1);
+                self.simd_load(quad, X1, d);
+                self.asm.packed(x64::PSUB + size, X1, X0);
+                X1
             }
             SimdLane::Shr if size == 0 => {
                 // The host has no shift of bytes: the bits of the next byte go away.

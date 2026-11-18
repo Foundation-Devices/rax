@@ -893,7 +893,9 @@ fn fast_interpreter_agrees_with_executor_on_random_code() {
     ];
     // The compiler for x86-64 has only these operations on elements, and no structures.
     let on_host = |name: &&str| {
-        let lanes = ["Add", "Ceq", "Cgt", "Shr", "Sub"];
+        let lanes = [
+            "Add", "Ceq", "Cgt", "Clt0", "Mla", "Mls", "Mul", "Shr", "Sub",
+        ];
         let leaves = match name.strip_prefix("SimdLane") {
             Some(kind) => !lanes.contains(&kind),
             None => *name == "SimdStructure",

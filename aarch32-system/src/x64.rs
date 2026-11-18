@@ -102,6 +102,8 @@ pub const PCMPGT: u8 = 0x64;
 pub const MOVDQA: u8 = 0x6f;
 pub const PCMPEQ: u8 = 0x74;
 pub const PADDQ: u8 = 0xd4;
+/// The low 16 bits of the products of the elements of 16 bits.
+pub const PMULLW: u8 = 0xd5;
 pub const PAND: u8 = 0xdb;
 pub const PANDN: u8 = 0xdf;
 pub const POR: u8 = 0xeb;
@@ -797,6 +799,7 @@ mod tests {
             ("psubw xmm0, xmm1", &[0x66, 0x0f, 0xf9, 0xc1], bytes(|a| a.packed(PSUB + 1, 0, 1))),
             ("psubd xmm0, xmm1", &[0x66, 0x0f, 0xfa, 0xc1], bytes(|a| a.packed(PSUB + 2, 0, 1))),
             ("psubq xmm0, xmm1", &[0x66, 0x0f, 0xfb, 0xc1], bytes(|a| a.packed(PSUB + 3, 0, 1))),
+            ("pmullw xmm0, xmm1", &[0x66, 0x0f, 0xd5, 0xc1], bytes(|a| a.packed(PMULLW, 0, 1))),
             ("pcmpgtb xmm0, xmm1", &[0x66, 0x0f, 0x64, 0xc1], bytes(|a| a.packed(PCMPGT, 0, 1))),
             ("pcmpgtw xmm0, xmm1", &[0x66, 0x0f, 0x65, 0xc1], bytes(|a| a.packed(PCMPGT + 1, 0, 1))),
             ("pcmpgtd xmm9, xmm6", &[0x66, 0x44, 0x0f, 0x66, 0xce], bytes(|a| a.packed(PCMPGT + 2, 9, 6))),
