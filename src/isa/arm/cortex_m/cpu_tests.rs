@@ -608,3 +608,55 @@ fn test_thumb32_rbit() {
 
     assert_eq!(cpu.get_gpr(0), 1);
 }
+
+/// A CPU at its reset with a handler at 0x200 for `exception`, and
+/// `MOV R0, #42` as its first instruction.
+fn cpu_with_handler(exception: u32) -> CortexMCpu {
+    let mut cpu = create_test_cpu();
+    cpu.memory_mut()
+        .write_u32(u64::from(4 * exception), 0x201)
+        .unwrap();
+    cpu.memory_mut().write_u16(0x100, 0x202A).unwrap();
+    cpu.reset();
+    cpu
+}
+
+#[test]
+fn test_pending_enabled_interrupt_is_taken() {
+    let mut cpu = cpu_with_handler(16 + 3);
+    cpu.nvic_mut().enable(3);
+    cpu.nvic_mut().set_pending(3);
+
+    let exit = cpu.step().unwrap();
+    assert!(matches!(
+        exit,
+        CpuExit::ExceptionTaken(ArmException::Irq(3))
+    ));
+    assert_eq!(cpu.get_pc(), 0x200);
+    assert!(!cpu.nvic().is_pending(3));
+}
+
+#[test]
+fn test_pending_disabled_interrupt_is_not_taken() {
+    let mut cpu = cpu_with_handler(16 + 3);
+    cpu.nvic_mut().set_pending(3);
+
+    let exit = cpu.step().unwrap();
+    assert!(matches!(exit, CpuExit::Continue));
+    assert_eq!(cpu.get_gpr(0), 42);
+    assert!(cpu.nvic().is_pending(3));
+}
+
+#[test]
+fn test_pending_pendsv_is_taken() {
+    let mut cpu = cpu_with_handler(14);
+    cpu.scb_mut().set_pendsv_pending(true);
+
+    let exit = cpu.step().unwrap();
+    assert!(matches!(
+        exit,
+        CpuExit::ExceptionTaken(ArmException::PendSv)
+    ));
+    assert_eq!(cpu.get_pc(), 0x200);
+    assert!(!cpu.scb().is_pendsv_pending());
+}

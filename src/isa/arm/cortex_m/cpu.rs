@@ -415,6 +415,14 @@ impl CortexMCpu {
         if self.systick.is_pending() {
             self.scb.set_systick_pending(true);
         }
+        // The common case: nothing is pending, so nothing can preempt.
+        if !self.scb.is_nmi_pending()
+            && !self.scb.is_pendsv_pending()
+            && !self.scb.is_systick_pending()
+            && !self.nvic.has_enabled_pending()
+        {
+            return Ok(None);
+        }
         let current = self.execution_priority();
         let mut best: Option<(i32, u16)> = None;
         let mut consider = |exception: u16, priority: i32| {

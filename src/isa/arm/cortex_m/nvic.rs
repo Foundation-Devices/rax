@@ -252,6 +252,14 @@ impl Nvic {
         }
     }
 
+    /// Whether an external interrupt is both pending and enabled.
+    pub fn has_enabled_pending(&self) -> bool {
+        self.pending
+            .iter()
+            .zip(&self.enabled)
+            .any(|(pending, enabled)| pending & enabled != 0)
+    }
+
     /// Read ISPR register.
     pub fn read_ispr(&self, reg: usize) -> u32 {
         if reg < 16 { self.pending[reg] } else { 0 }
