@@ -50,7 +50,9 @@ pub const TLB_BITS: u32 = 8;
 /// The log2 of the size of an entry.
 pub const TLB_ENTRY_SHIFT: u32 = 5;
 /// The offset of a 32-bit field: the virtual page when the accesses to the page can go
-/// to the memory of the host with no call, else a number that is not a page address.
+/// to the memory of the host with no call, else a number with a bit that is not 0 in its
+/// bits 11:2. The code compares the field with the page of an address, and x86-64 code
+/// keeps the bits 1:0 of the address of a word in the compare.
 pub const TLB_DIRECT_PAGE: usize = 4;
 /// The offset of a field of the size of a pointer: the address in the host of the
 /// virtual page, minus the virtual address of the page.

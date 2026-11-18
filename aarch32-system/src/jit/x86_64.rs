@@ -139,6 +139,17 @@ enum CarryOut {
     Register,
 }
 
+/// What the flags of the host have from a compare of FP numbers with no NaN, when
+/// `asm.flags_changed` is not set: CF for less and ZF for equal.
+#[derive(Clone, Copy, PartialEq)]
+enum Compared {
+    No,
+    /// The compare that gave the flags of the FPSCR.
+    Fpscr,
+    /// The guest flags are also from this compare.
+    Guest,
+}
+
 /// The second operand of an operation.
 #[derive(Clone, Copy, PartialEq)]
 enum Source {
@@ -264,6 +275,7 @@ struct Compiler<'a> {
     borrow: bool,
     /// The count of the changes of `host_flags`.
     flag_changes: u32,
+    compared: Compared,
 }
 
 impl Compiler<'_> {
@@ -327,10 +339,23 @@ impl Compiler<'_> {
         self.borrow = borrow;
         self.flag_changes += 1;
         self.asm.flags_changed = false;
+        self.compared = Compared::No;
     }
 
     /// The condition of the host that is true when the guest condition is true.
     fn condition(&mut self, cond: u8) -> u8 {
+        if self.compared == Compared::Guest && !self.asm.flags_changed {
+            // CF is N and the inverse of C, ZF is Z, and V is 0.
+            match cond {
+                0 => return x64::E,
+                1 => return x64::NE,
+                2 | 5 | 10 => return x64::AE,
+                3 | 4 | 11 => return x64::B,
+                8 | 12 => return x64::A,
+                9 | 13 => return x64::BE,
+                _ => {}
+            }
+        }
         let needed = condition_flags(cond);
         if self.host_flags() & needed != needed {
             // OF gets V: 1 - (-127) is an overflow, 0 - (-127) is not.
@@ -851,28 +876,39 @@ impl Compiler<'_> {
 
     /// The same, with a branch to `other` in the place of the exit.
     fn direct_or(&mut self, other: Label, address: Reg, size: u32, table: usize) {
+        let last = size.saturating_sub(1);
+        self.entry(other, address, last, !(PAGE_SIZE - 1), table);
+    }
+
+    /// The same for `size` bytes of words, and leaves also when the address is not a
+    /// multiple of 4.
+    fn direct_words(&mut self, index: usize, address: Reg, size: u32, table: usize) {
+        let leave = self.leave_at(index);
+        // The last word has the low bits of the address. When it is in the page of the
+        // entry of the first one, all the words are.
+        let last = size.saturating_sub(4);
+        self.entry(leave, address, last, !(PAGE_SIZE - 1) | 3, table);
+    }
+
+    /// T1 gets the entry of `table` for the guest address in `address`, then the address
+    /// in the host of the guest address 0, or the code goes to `other` when the bits
+    /// `mask` of `address + last` are not the page of the entry.
+    fn entry(&mut self, other: Label, address: Reg, last: u32, mask: u32, table: usize) {
         let a = &mut self.asm;
         a.mov(Long, T1, Rm::Reg(address));
-        a.shift(Shift::Shr, Long, Rm::Reg(T1), 12);
-        a.alu_imm(x64::Alu::And, Long, Rm::Reg(T1), (1 << TLB_BITS) - 1);
-        a.shift(Shift::Shl, Long, Rm::Reg(T1), TLB_ENTRY_SHIFT);
+        a.shift(Shift::Shr, Long, Rm::Reg(T1), 12 - TLB_ENTRY_SHIFT);
+        let entries = ((1 << TLB_BITS) - 1) << TLB_ENTRY_SHIFT;
+        a.alu_imm(x64::Alu::And, Long, Rm::Reg(T1), entries);
         a.alu(x64::Alu::Add, Quad, T1, mem(RSP, table));
-        if size > 1 {
-            a.lea(Long, T2, mem(address, size as usize - 1));
+        if last != 0 {
+            a.lea(Long, T2, mem(address, last as usize));
         } else {
             a.mov(Long, T2, Rm::Reg(address));
         }
-        a.alu_imm(x64::Alu::And, Long, Rm::Reg(T2), !(PAGE_SIZE - 1));
+        a.alu_imm(x64::Alu::And, Long, Rm::Reg(T2), mask);
         a.alu(x64::Alu::Cmp, Long, T2, mem(T1, TLB_DIRECT_PAGE));
         a.jcc(x64::NE, other);
         a.mov(Quad, T1, mem(T1, TLB_ADDEND));
-    }
-
-    /// Leaves before the instruction `index` when the address is not a multiple of 4.
-    fn aligned(&mut self, index: usize, address: Reg) {
-        let leave = self.leave_at(index);
-        self.asm.test_imm(Rm::Reg(address), 3);
-        self.asm.jcc(x64::NE, leave);
     }
 
     /// The register with the address of an access with an offset: T0 when the address
@@ -997,9 +1033,8 @@ impl Compiler<'_> {
     /// of the register `PC` goes to T0. The address is a multiple of 4, or the code
     /// leaves before the instruction `index`.
     fn words(&mut self, index: usize, load: bool, registers: &[u8], address: Reg) {
-        self.aligned(index, address);
         let table = if load { READS } else { WRITES };
-        self.direct(index, address, registers.len() as u32 * 4, table);
+        self.direct_words(index, address, registers.len() as u32 * 4, table);
         // A load can change the register of the address.
         self.asm.alu(x64::Alu::Add, Quad, T1, Rm::Reg(address));
         for (word, &register) in registers.iter().enumerate() {
@@ -1495,10 +1530,16 @@ impl Compiler<'_> {
         self.block.is_admitted(index, self.fp.controls)
     }
 
-    /// Loads or stores `count` D registers from D`d` at the guest address in `address`.
-    fn fp_block(&mut self, index: usize, load: bool, d: u8, count: u8, address: Reg) {
+    /// Loads or stores `count` D registers from D`d` at the guest address in `address`,
+    /// which is a multiple of 4 for `words`, or else the code leaves.
+    fn fp_block(&mut self, index: usize, load: bool, words: bool, d: u8, count: u8, address: Reg) {
         let table = if load { READS } else { WRITES };
-        self.direct(index, address, u32::from(count) * 8, table);
+        let size = u32::from(count) * 8;
+        if words {
+            self.direct_words(index, address, size, table);
+        } else {
+            self.direct(index, address, size, table);
+        }
         let a = &mut self.asm;
         a.alu(x64::Alu::Add, Quad, T1, Rm::Reg(address));
         for register in 0..count {
@@ -1662,6 +1703,8 @@ impl Compiler<'_> {
             } => {
                 let unsure = self.leave_at(index);
                 let a = &mut self.asm;
+                a.mov(Long, T1, mem(STATE, FPSCR));
+                a.alu_imm(x64::Alu::And, Long, Rm::Reg(T1), 0x0fff_ffff);
                 a.fp_load(double, X0, fp_reg(double, d));
                 if with_zero {
                     a.mov_imm(T0, 0);
@@ -1675,14 +1718,15 @@ impl Compiler<'_> {
                 a.jcc(x64::P, unsure);
                 // N for less, Z and C for equal, C for greater.
                 a.mov_imm(T0, 0x2000_0000);
-                a.mov_imm(T1, 0x6000_0000);
-                a.cmov(x64::E, T0, Rm::Reg(T1));
-                a.mov_imm(T1, 0x8000_0000);
-                a.cmov(x64::B, T0, Rm::Reg(T1));
-                a.mov(Long, T1, mem(STATE, FPSCR));
-                a.alu_imm(x64::Alu::And, Long, Rm::Reg(T1), 0x0fff_ffff);
-                a.alu(x64::Alu::Or, Long, T1, Rm::Reg(T0));
+                a.mov_imm(T2, 0x6000_0000);
+                a.cmov(x64::E, T0, Rm::Reg(T2));
+                a.mov_imm(T2, 0x8000_0000);
+                a.cmov(x64::B, T0, Rm::Reg(T2));
+                // An addition that keeps the flags of the host, for VMRS after it.
+                a.lea(Long, T1, indexed(T1, T0, 0));
                 a.mov_to(Long, mem(STATE, FPSCR), T1);
+                self.set_host_flags(0, false);
+                self.compared = Compared::Fpscr;
             }
             Op::FpConvert { kind, d, m } => {
                 let (to_float, double, unsigned) = match kind {
@@ -2035,13 +2079,12 @@ impl Compiler<'_> {
                 offset,
             } => {
                 let address = self.address(rn, Index::Offset, offset);
-                self.aligned(index, address);
                 let (size, state) = if double {
                     (Quad, dreg(d))
                 } else {
                     (Long, sreg(d))
                 };
-                self.direct(index, address, if double { 8 } else { 4 }, READS);
+                self.direct_words(index, address, if double { 8 } else { 4 }, READS);
                 self.asm.mov(size, T2, indexed(T1, address, 0));
                 self.asm.mov_to(size, state, T2);
             }
@@ -2081,15 +2124,25 @@ impl Compiler<'_> {
                 offset,
             } => {
                 let address = self.address(rn, Index::Offset, offset);
-                self.aligned(index, address);
                 let (size, state) = if double {
                     (Quad, dreg(d))
                 } else {
                     (Long, sreg(d))
                 };
-                self.direct(index, address, if double { 8 } else { 4 }, WRITES);
+                self.direct_words(index, address, if double { 8 } else { 4 }, WRITES);
                 self.asm.mov(size, T2, state);
                 self.asm.mov_to(size, indexed(T1, address, 0), T2);
+            }
+            Op::FpFlags if self.compared != Compared::No && !self.asm.flags_changed => {
+                // The same flags in the form of RAX, with V in AL.
+                const C_FLAG: u32 = 1 << FLAGS_C;
+                let a = &mut self.asm;
+                a.mov_imm(FLAGS, C_FLAG);
+                a.mov_imm(T1, C_FLAG | 1 << 14);
+                a.cmov(x64::E, FLAGS, Rm::Reg(T1));
+                a.mov_imm(T1, 1 << 15);
+                a.cmov(x64::B, FLAGS, Rm::Reg(T1));
+                self.compared = Compared::Guest;
             }
             Op::FpFlags => {
                 // N, Z, C and V are the bits 31 to 28 of the FPSCR.
@@ -2192,7 +2245,7 @@ impl Compiler<'_> {
                     self.asm.jcc(x64::NE, leave);
                 }
                 let load = matches!(step.op, Op::SimdLoad { .. });
-                self.fp_block(index, load, d, count, address);
+                self.fp_block(index, load, false, d, count, address);
                 self.simd_writeback(rn, rm, u32::from(count) * 8);
             }
             Op::FpElementFromCore {
@@ -2286,9 +2339,8 @@ impl Compiler<'_> {
                     self.asm.lea(Long, T0, mem(start, -size as usize));
                     start = T0;
                 }
-                self.aligned(index, start);
                 let load = matches!(step.op, Op::FpLoadMultiple { .. });
-                self.fp_block(index, load, d, count, start);
+                self.fp_block(index, load, true, d, count, start);
                 match (writeback, decrement) {
                     (false, _) => {}
                     (true, true) => self.write(rn, T0),
@@ -2366,7 +2418,7 @@ impl Compiler<'_> {
                 let condition = self.condition(step.cond);
                 self.asm.jcc(condition ^ 1, next);
             }
-            let before = (self.host_flags(), self.flag_changes);
+            let before = (self.host_flags(), self.flag_changes, self.compared);
             if !self.op(index, *step, live[index]) {
                 // The interpreter runs the instruction. The code after it is for a
                 // condition that is false.
@@ -2380,9 +2432,12 @@ impl Compiler<'_> {
             if conditional {
                 // The flags of the host are known after the instruction only when they
                 // are the same with and without it.
-                let same = !self.asm.flags_changed && self.flag_changes == before.1;
+                let same = !self.asm.flags_changed
+                    && self.flag_changes == before.1
+                    && self.compared == before.2;
+                let known = before.0 != 0 || self.compared != Compared::No;
                 self.asm.bind(next);
-                self.asm.flags_changed = !(same && before.0 != 0);
+                self.asm.flags_changed = !(same && known);
             }
         }
         if compiled == 0 {
@@ -2468,6 +2523,7 @@ pub(super) fn compile(unit: Unit) -> Option<(Vec<u8>, Vec<u8>, Links)> {
         host_flags: 0,
         borrow: false,
         flag_changes: 0,
+        compared: Compared::No,
     };
     compiler.compile()
 }
