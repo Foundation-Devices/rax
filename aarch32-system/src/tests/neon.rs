@@ -1,6 +1,7 @@
 //! Advanced SIMD instructions on integer elements against a model that follows the
 //! pseudocode of the ARM architecture manual: three registers of the same length, the
-//! shifts by an immediate value, and the operations with two lengths.
+//! shifts by an immediate value, the operations with two lengths, and the operations
+//! with two registers.
 
 use rax::arm::vfp::Fpscr;
 
@@ -588,11 +589,267 @@ fn two_lengths(random: &mut Random) -> Instruction {
     )
 }
 
+/// The operations with two registers: `1111 0011 1D11 size A Vd 0 B M 0 Vm`, with the
+/// Q bit as the low bit of B for most of them.
+fn two_registers(random: &mut Random) -> Instruction {
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Misc {
+        Rev64,
+        Rev32,
+        Rev16,
+        Paddl,
+        Cls,
+        Clz,
+        Cnt,
+        Mvn,
+        Padal,
+        Qabs,
+        Qneg,
+        Cgt0,
+        Cge0,
+        Ceq0,
+        Cle0,
+        Clt0,
+        Abs,
+        Neg,
+        Swp,
+        Trn,
+        Uzp,
+        Zip,
+        Movn,
+        Qmovun,
+        Qmovn,
+        Shll,
+    }
+    // The operation, A, the 4 high bits of B, and the largest size field.
+    const MISCS: [(Misc, u32, u32, u32); 26] = [
+        (Misc::Rev64, 0, 0b0000, 2),
+        (Misc::Rev32, 0, 0b0001, 1),
+        (Misc::Rev16, 0, 0b0010, 0),
+        (Misc::Paddl, 0, 0b0100, 2),
+        (Misc::Cls, 0, 0b1000, 2),
+        (Misc::Clz, 0, 0b1001, 2),
+        (Misc::Cnt, 0, 0b1010, 0),
+        (Misc::Mvn, 0, 0b1011, 0),
+        (Misc::Padal, 0, 0b1100, 2),
+        (Misc::Qabs, 0, 0b1110, 2),
+        (Misc::Qneg, 0, 0b1111, 2),
+        (Misc::Cgt0, 1, 0b0000, 2),
+        (Misc::Cge0, 1, 0b0001, 2),
+        (Misc::Ceq0, 1, 0b0010, 2),
+        (Misc::Cle0, 1, 0b0011, 2),
+        (Misc::Clt0, 1, 0b0100, 2),
+        (Misc::Abs, 1, 0b0110, 2),
+        (Misc::Neg, 1, 0b0111, 2),
+        (Misc::Swp, 2, 0b0000, 0),
+        (Misc::Trn, 2, 0b0001, 2),
+        (Misc::Uzp, 2, 0b0010, 2),
+        (Misc::Zip, 2, 0b0011, 2),
+        (Misc::Movn, 2, 0b0100, 2),
+        (Misc::Qmovun, 2, 0b0100, 2),
+        (Misc::Qmovn, 2, 0b0101, 2),
+        (Misc::Shll, 2, 0b0110, 2),
+    ];
+    let (kind, a, b, sizes) = MISCS[random.below(26) as usize];
+    let size = random.below(sizes + 1);
+    let bits = 8 << size;
+    let narrow = matches!(kind, Misc::Movn | Misc::Qmovun | Misc::Qmovn);
+    let long = kind == Misc::Shll;
+    let pairs = matches!(kind, Misc::Paddl | Misc::Padal);
+    let unsigned = random.below(2) == 1;
+    // VUZP and VZIP of two 32-bit elements have no encoding: they are VTRN.
+    let always_quad = matches!(kind, Misc::Uzp | Misc::Zip) && size == 2;
+    let is_quad = !narrow && !long && (always_quad || random.below(2) == 0);
+    // The low bit of B: Q, but an other operation or U for the two-length ones, and
+    // the two pair operations have U above it.
+    let low = match kind {
+        Misc::Movn | Misc::Shll => 0,
+        Misc::Qmovun => 1,
+        Misc::Qmovn => u32::from(unsigned),
+        _ => u32::from(is_quad),
+    };
+    let b = b << 1 | low | if pairs { u32::from(unsigned) << 1 } else { 0 };
+    let register =
+        |random: &mut Random, even: bool| (random.below(32) & if even { !1 } else { !0 }) as usize;
+    let d = register(random, is_quad || long);
+    let mut m = register(random, is_quad || narrow);
+    if matches!(kind, Misc::Swp | Misc::Trn | Misc::Uzp | Misc::Zip) && m == d {
+        // These write the two registers: one register for the two has no defined result.
+        m = (d + 2) % 32;
+    }
+    let arm = 0xf3b0_0000 | size << 18 | a << 16 | b << 6 | field(d, 12, 22) | field(m, 0, 5);
+    (
+        format!("{kind:?} unsigned {unsigned} size {size} quad {is_quad}"),
+        arm,
+        Box::new(move |regs| {
+            let read = |regs: &[u64; 32], number: usize, wide: bool| {
+                if wide {
+                    quad(regs, number)
+                } else {
+                    regs[number].into()
+                }
+            };
+            let width = if is_quad { 128 } else { 64 };
+            let count = width / bits;
+            let source = read(regs, m, is_quad || narrow);
+            let old = read(regs, d, is_quad || long);
+            let signed = |vector: u128| elements(vector, bits, count, false);
+            let plain = |vector: u128| elements(vector, bits, count, true);
+            let mut saturated = false;
+            let ones = |holds: bool| if holds { -1 } else { 0 };
+            // The operations on each element with its sign.
+            let each = |saturated: &mut bool, operation: &dyn Fn(i128) -> (i128, bool)| {
+                let results: Vec<i128> = signed(source)
+                    .into_iter()
+                    .map(|value| {
+                        let (result, out_of_range) = operation(value);
+                        *saturated |= out_of_range;
+                        result
+                    })
+                    .collect();
+                vector_of(&results, bits)
+            };
+            let reversed = |group: u32| {
+                let values = plain(source);
+                let per_group = (group / bits) as usize;
+                let results: Vec<i128> = (0..values.len())
+                    .map(|index| {
+                        values[index - index % per_group + per_group - 1 - index % per_group]
+                    })
+                    .collect();
+                vector_of(&results, bits)
+            };
+            let mut second = None;
+            let result = match kind {
+                Misc::Rev64 => reversed(64),
+                Misc::Rev32 => reversed(32),
+                Misc::Rev16 => reversed(16),
+                Misc::Paddl | Misc::Padal => {
+                    let values = elements(source, bits, count, unsigned);
+                    let sums = elements(old, 2 * bits, count / 2, true);
+                    let results: Vec<i128> = (0..count as usize / 2)
+                        .map(|index| {
+                            let sum = values[2 * index] + values[2 * index + 1];
+                            if kind == Misc::Padal {
+                                sums[index] + sum
+                            } else {
+                                sum
+                            }
+                        })
+                        .collect();
+                    vector_of(&results, 2 * bits)
+                }
+                Misc::Cls => each(&mut saturated, &|value| {
+                    let same = (1..bits).take_while(|&bit| {
+                        value >> (bits - 1 - bit) & 1 == value >> (bits - 1) & 1
+                    });
+                    (same.count() as i128, false)
+                }),
+                Misc::Clz => vector_of(
+                    &plain(source)
+                        .iter()
+                        .map(|&value| i128::from(bits - (128 - (value as u128).leading_zeros())))
+                        .collect::<Vec<_>>(),
+                    bits,
+                ),
+                Misc::Cnt => each(&mut saturated, &|value| {
+                    (i128::from((value as u8).count_ones()), false)
+                }),
+                Misc::Mvn => !source,
+                Misc::Qabs => each(&mut saturated, &|value| saturate(value.abs(), bits, false)),
+                Misc::Qneg => each(&mut saturated, &|value| saturate(-value, bits, false)),
+                Misc::Cgt0 => each(&mut saturated, &|value| (ones(value > 0), false)),
+                Misc::Cge0 => each(&mut saturated, &|value| (ones(value >= 0), false)),
+                Misc::Ceq0 => each(&mut saturated, &|value| (ones(value == 0), false)),
+                Misc::Cle0 => each(&mut saturated, &|value| (ones(value <= 0), false)),
+                Misc::Clt0 => each(&mut saturated, &|value| (ones(value < 0), false)),
+                Misc::Abs => each(&mut saturated, &|value| (value.abs(), false)),
+                Misc::Neg => each(&mut saturated, &|value| (-value, false)),
+                Misc::Swp => {
+                    second = Some(old);
+                    source
+                }
+                Misc::Trn | Misc::Uzp | Misc::Zip => {
+                    let (first, other) = (plain(old), plain(source));
+                    let all: Vec<i128> = first.iter().chain(&other).copied().collect();
+                    let half = count as usize;
+                    let (new_d, new_m): (Vec<i128>, Vec<i128>) = match kind {
+                        // The odd elements of the first and the even ones of the
+                        // second change places.
+                        Misc::Trn => (0..half)
+                            .map(|index| {
+                                if index % 2 == 0 {
+                                    (first[index], first[index + 1])
+                                } else {
+                                    (other[index - 1], other[index])
+                                }
+                            })
+                            .unzip(),
+                        Misc::Uzp => (0..half)
+                            .map(|index| (all[2 * index], all[2 * index + 1]))
+                            .unzip(),
+                        _ => (0..half)
+                            .map(|index| {
+                                let zipped = |place: usize| {
+                                    if place % 2 == 0 {
+                                        first[place / 2]
+                                    } else {
+                                        other[place / 2]
+                                    }
+                                };
+                                (zipped(index), zipped(half + index))
+                            })
+                            .unzip(),
+                    };
+                    second = Some(vector_of(&new_m, bits));
+                    vector_of(&new_d, bits)
+                }
+                Misc::Movn | Misc::Qmovun | Misc::Qmovn => {
+                    let from_unsigned = kind == Misc::Qmovn && unsigned;
+                    let to_unsigned = kind == Misc::Qmovun || from_unsigned;
+                    let values = elements(source, 2 * bits, 64 / bits, from_unsigned);
+                    let results: Vec<i128> = values
+                        .into_iter()
+                        .map(|value| {
+                            if kind == Misc::Movn {
+                                return value;
+                            }
+                            let (result, out_of_range) = saturate(value, bits, to_unsigned);
+                            saturated |= out_of_range;
+                            result
+                        })
+                        .collect();
+                    vector_of(&results, bits)
+                }
+                Misc::Shll => {
+                    let values = elements(source, bits, 64 / bits, true);
+                    let results: Vec<i128> =
+                        values.into_iter().map(|value| value << bits).collect();
+                    vector_of(&results, 2 * bits)
+                }
+            };
+            let mut write = |number: usize, value: u128, wide: bool| {
+                if wide {
+                    set_quad(regs, number, value);
+                } else {
+                    regs[number] = value as u64;
+                }
+            };
+            write(d, result, is_quad || long);
+            if let Some(second) = second {
+                write(m, second, is_quad);
+            }
+            saturated
+        }),
+    )
+}
+
 fn check(trio: &mut Trio, random: &mut Random) -> Result<(), String> {
-    let (name, arm, apply) = match random.below(3) {
+    let (name, arm, apply) = match random.below(4) {
         0 => three_registers(random),
         1 => shift_immediate(random),
-        _ => two_lengths(random),
+        2 => two_lengths(random),
+        _ => two_registers(random),
     };
     let thumb = random.below(2) == 0;
     let raw = if thumb {
