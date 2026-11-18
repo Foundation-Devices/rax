@@ -23,6 +23,11 @@ use crate::{
     FpUnary, Index, Op, PC, SP, SimdLane, SimdLogic, Step, USER_MODE, Width,
 };
 
+/// True when the code generator has code for the FP or SIMD operation.
+pub(super) fn has_fp_code(_op: Op) -> bool {
+    true
+}
+
 /// More than the largest code of one instruction, in bytes.
 pub(super) const INSTRUCTION_CODE: usize = 1024;
 

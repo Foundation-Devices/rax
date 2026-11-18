@@ -891,6 +891,16 @@ fn fast_interpreter_agrees_with_executor_on_random_code() {
         "Umlal",
         "Umull",
     ];
+    // The compiler for x86-64 has only these operations on elements, and no structures.
+    let on_host = |name: &&str| {
+        let lanes = ["Add", "Ceq", "Cgt", "Shr", "Sub"];
+        let leaves = match name.strip_prefix("SimdLane") {
+            Some(kind) => !lanes.contains(&kind),
+            None => *name == "SimdStructure",
+        };
+        cfg!(target_arch = "aarch64") || !leaves
+    };
+    let all: Vec<_> = all.into_iter().filter(on_host).collect();
     assert_eq!(covered, all);
 }
 

@@ -86,6 +86,29 @@ pub enum Unary {
     Idiv = 7,
 }
 
+/// The scalar operations of SSE, by their opcode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sse {
+    Sqrt = 0x51,
+    Add = 0x58,
+    Mul = 0x59,
+    Sub = 0x5c,
+    Div = 0x5e,
+}
+
+// The operations on the elements of XMM registers, by their opcode. The compares and the
+// additions take the log2 of the size of an element in the opcode.
+pub const PCMPGT: u8 = 0x64;
+pub const MOVDQA: u8 = 0x6f;
+pub const PCMPEQ: u8 = 0x74;
+pub const PADDQ: u8 = 0xd4;
+pub const PAND: u8 = 0xdb;
+pub const PANDN: u8 = 0xdf;
+pub const POR: u8 = 0xeb;
+pub const PXOR: u8 = 0xef;
+pub const PSUB: u8 = 0xf8;
+pub const PADD: u8 = 0xfc;
+
 // Conditions.
 pub const O: u8 = 0;
 pub const NO: u8 = 1;
@@ -97,6 +120,8 @@ pub const BE: u8 = 6;
 pub const A: u8 = 7;
 pub const S: u8 = 8;
 pub const NS: u8 = 9;
+/// After a compare of FP numbers: one of them is a NaN.
+pub const P: u8 = 10;
 pub const L: u8 = 12;
 pub const GE: u8 = 13;
 pub const LE: u8 = 14;
@@ -333,9 +358,9 @@ impl Asm {
     }
 
     /// DIV and IDIV divide EDX:EAX, with the quotient in EAX.
-    pub fn unary(&mut self, op: Unary, dst: Rm) {
+    pub fn unary(&mut self, op: Unary, size: Size, dst: Rm) {
         self.flags_changed = true;
-        self.modrm_one(Long, &[0xf7], op as u8, dst);
+        self.modrm_one(size, &[0xf7], op as u8, dst);
     }
 
     pub fn imul(&mut self, size: Size, dst: Reg, src: Rm) {
@@ -409,6 +434,125 @@ impl Asm {
     pub fn or_ah_cl(&mut self) {
         self.flags_changed = true;
         self.emit(&[0x08, 0xcc]);
+    }
+
+    /// An instruction of SSE: the prefix that gives the precision (or 0), and the opcode
+    /// after 0x0f. `size` is that of an operand in a general register.
+    fn sse(&mut self, prefix: u8, size: Size, opcode: u8, reg: Reg, rm: Rm) {
+        if prefix != 0 {
+            self.bytes.push(prefix);
+        }
+        self.encode(size, &[0x0f, opcode], reg, rm, false, false);
+    }
+
+    fn scalar_prefix(double: bool) -> u8 {
+        if double { 0xf2 } else { 0xf3 }
+    }
+
+    /// A load of a scalar to an XMM register.
+    pub fn fp_load(&mut self, double: bool, dst: Reg, src: Rm) {
+        self.sse(Self::scalar_prefix(double), Long, 0x10, dst, src);
+    }
+
+    pub fn fp_store(&mut self, double: bool, dst: Rm, src: Reg) {
+        self.sse(Self::scalar_prefix(double), Long, 0x11, src, dst);
+    }
+
+    /// `dst = dst op src` for scalars in XMM registers; `dst = sqrt(src)`.
+    pub fn fp(&mut self, op: Sse, double: bool, dst: Reg, src: Reg) {
+        self.sse(
+            Self::scalar_prefix(double),
+            Long,
+            op as u8,
+            dst,
+            Rm::Reg(src),
+        );
+    }
+
+    /// A compare of two scalars that is quiet for a quiet NaN. PF is set when one of
+    /// them is a NaN, else CF for less and ZF for equal.
+    pub fn ucomis(&mut self, double: bool, first: Reg, second: Reg) {
+        self.flags_changed = true;
+        let prefix = if double { 0x66 } else { 0 };
+        self.sse(prefix, Long, 0x2e, first, Rm::Reg(second));
+    }
+
+    /// The scalar of a signed integer of `size`.
+    pub fn cvtsi2s(&mut self, double: bool, size: Size, dst: Reg, src: Rm) {
+        self.sse(Self::scalar_prefix(double), size, 0x2a, dst, src);
+    }
+
+    /// The signed integer of `size` of a scalar, rounded to zero.
+    pub fn cvtts2si(&mut self, double: bool, size: Size, dst: Reg, src: Reg) {
+        self.sse(Self::scalar_prefix(double), size, 0x2c, dst, Rm::Reg(src));
+    }
+
+    /// The low bits of an XMM register get a general register, the others get 0.
+    pub fn movd_to_xmm(&mut self, size: Size, dst: Reg, src: Reg) {
+        self.sse(0x66, size, 0x6e, dst, Rm::Reg(src));
+    }
+
+    pub fn movd_from_xmm(&mut self, size: Size, dst: Reg, src: Reg) {
+        self.sse(0x66, size, 0x7e, src, Rm::Reg(dst));
+    }
+
+    /// A load of 64 bits to an XMM register; the high half gets 0.
+    pub fn movq_load(&mut self, dst: Reg, src: Rm) {
+        self.sse(0xf3, Long, 0x7e, dst, src);
+    }
+
+    pub fn movq_store(&mut self, dst: Rm, src: Reg) {
+        self.sse(0x66, Long, 0xd6, src, dst);
+    }
+
+    /// A load of 128 bits at each address.
+    pub fn movdqu_load(&mut self, dst: Reg, src: Rm) {
+        self.sse(0xf3, Long, 0x6f, dst, src);
+    }
+
+    pub fn movdqu_store(&mut self, dst: Rm, src: Reg) {
+        self.sse(0xf3, Long, 0x7f, src, dst);
+    }
+
+    /// `dst = dst op src` on the elements of XMM registers. PANDN has the inverse of
+    /// `dst`.
+    pub fn packed(&mut self, opcode: u8, dst: Reg, src: Reg) {
+        self.sse(0x66, Long, opcode, dst, Rm::Reg(src));
+    }
+
+    /// A shift to the right of the elements of 2 << `size` bytes; `arithmetic` keeps the
+    /// sign. An amount of the size of the element or more gives 0, or the sign.
+    pub fn packed_shift(&mut self, size: u8, arithmetic: bool, dst: Reg, amount: u8) {
+        let extension = if arithmetic { 4 } else { 2 };
+        self.sse(0x66, Long, 0x70 + size, extension, Rm::Reg(dst));
+        self.bytes.push(amount);
+    }
+
+    /// The elements of 32 bits of `dst` get those of `src` that `order` gives.
+    pub fn pshufd(&mut self, dst: Reg, src: Reg, order: u8) {
+        self.sse(0x66, Long, 0x70, dst, Rm::Reg(src));
+        self.bytes.push(order);
+    }
+
+    /// A compare of the elements of 32 bits as FP numbers: 0 for equal, 1 for less,
+    /// 2 for less or equal. An element gets all ones or 0.
+    pub fn cmpps(&mut self, dst: Reg, src: Reg, predicate: u8) {
+        self.sse(0, Long, 0xc2, dst, Rm::Reg(src));
+        self.bytes.push(predicate);
+    }
+
+    /// A general register gets the high bit of each byte of an XMM register.
+    pub fn pmovmskb(&mut self, dst: Reg, src: Reg) {
+        self.sse(0x66, Long, 0xd7, dst, Rm::Reg(src));
+    }
+
+    /// Writes the control and status register of SSE to 32 bits of memory.
+    pub fn stmxcsr(&mut self, dst: Rm) {
+        self.modrm_one(Long, &[0x0f, 0xae], 3, dst);
+    }
+
+    pub fn ldmxcsr(&mut self, src: Rm) {
+        self.modrm_one(Long, &[0x0f, 0xae], 2, src);
     }
 
     pub fn push(&mut self, register: Reg) {
@@ -577,10 +721,17 @@ mod tests {
             ("shr r8d, cl", &[0x41, 0xd3, 0xe8], bytes(|a| a.shift_cl(Shift::Shr, Rm::Reg(R8)))),
             ("sar esi, cl", &[0xd3, 0xfe], bytes(|a| a.shift_cl(Shift::Sar, Rm::Reg(RSI)))),
             ("ror edi, cl", &[0xd3, 0xcf], bytes(|a| a.shift_cl(Shift::Ror, Rm::Reg(RDI)))),
-            ("not ebx", &[0xf7, 0xd3], bytes(|a| a.unary(Unary::Not, Rm::Reg(RBX)))),
-            ("neg r10d", &[0x41, 0xf7, 0xda], bytes(|a| a.unary(Unary::Neg, Rm::Reg(R10)))),
-            ("div ecx", &[0xf7, 0xf1], bytes(|a| a.unary(Unary::Div, Rm::Reg(RCX)))),
-            ("idiv ecx", &[0xf7, 0xf9], bytes(|a| a.unary(Unary::Idiv, Rm::Reg(RCX)))),
+            ("not ebx", &[0xf7, 0xd3], bytes(|a| a.unary(Unary::Not, Long, Rm::Reg(RBX)))),
+            ("neg r10d", &[0x41, 0xf7, 0xda], bytes(|a| a.unary(Unary::Neg, Long, Rm::Reg(R10)))),
+            ("div ecx", &[0xf7, 0xf1], bytes(|a| a.unary(Unary::Div, Long, Rm::Reg(RCX)))),
+            ("idiv ecx", &[0xf7, 0xf9], bytes(|a| a.unary(Unary::Idiv, Long, Rm::Reg(RCX)))),
+            ("not rdx", &[0x48, 0xf7, 0xd2], bytes(|a| a.unary(Unary::Not, Quad, Rm::Reg(RDX)))),
+            ("xor rbx, rdx", &[0x48, 0x31, 0xd3], bytes(|a| a.alu(Alu::Xor, Quad, RBX, Rm::Reg(RDX)))),
+            ("and rbx, qword ptr [rbp + 1024]", &[0x48, 0x23, 0x9d, 0x00, 0x04, 0x00, 0x00], bytes(|a| a.alu(Alu::And, Quad, RBX, mem(RBP, 1024)))),
+            ("cmp rbx, rdx", &[0x48, 0x39, 0xd3], bytes(|a| a.alu(Alu::Cmp, Quad, RBX, Rm::Reg(RDX)))),
+            ("mov qword ptr [rbp + 1024], rcx", &[0x48, 0x89, 0x8d, 0x00, 0x04, 0x00, 0x00], bytes(|a| a.mov_to(Quad, mem(RBP, 1024), RCX))),
+            ("mov rcx, qword ptr [rdx + 16]", &[0x48, 0x8b, 0x4a, 0x10], bytes(|a| a.mov(Quad, RCX, mem(RDX, 16)))),
+            ("xor ebx, 2147483648", &[0x81, 0xf3, 0x00, 0x00, 0x00, 0x80], bytes(|a| a.alu_imm(Alu::Xor, Long, Rm::Reg(RBX), 0x8000_0000))),
             ("imul ebx, esi", &[0x0f, 0xaf, 0xde], bytes(|a| a.imul(Long, RBX, Rm::Reg(RSI)))),
             ("imul ebx, dword ptr [rbp + 48]", &[0x0f, 0xaf, 0x5d, 0x30], bytes(|a| a.imul(Long, RBX, mem(RBP, 48)))),
             ("imul rbx, rdx", &[0x48, 0x0f, 0xaf, 0xda], bytes(|a| a.imul(Quad, RBX, Rm::Reg(RDX)))),
@@ -598,6 +749,73 @@ mod tests {
             ("bt esi, 31", &[0x0f, 0xba, 0xe6, 0x1f], bytes(|a| a.bt(Rm::Reg(RSI), 31))),
             ("bt r12d, 3", &[0x41, 0x0f, 0xba, 0xe4, 0x03], bytes(|a| a.bt(Rm::Reg(R12), 3))),
             ("bt dword ptr [rbp + 48], 5", &[0x0f, 0xba, 0x65, 0x30, 0x05], bytes(|a| a.bt(mem(RBP, 48), 5))),
+            ("movss xmm0, dword ptr [rbp + 1024]", &[0xf3, 0x0f, 0x10, 0x85, 0x00, 0x04, 0x00, 0x00], bytes(|a| a.fp_load(false, 0, mem(RBP, 1024)))),
+            ("movsd xmm2, qword ptr [rbp + 1032]", &[0xf2, 0x0f, 0x10, 0x95, 0x08, 0x04, 0x00, 0x00], bytes(|a| a.fp_load(true, 2, mem(RBP, 1032)))),
+            ("movss dword ptr [rbp + 1024], xmm0", &[0xf3, 0x0f, 0x11, 0x85, 0x00, 0x04, 0x00, 0x00], bytes(|a| a.fp_store(false, mem(RBP, 1024), 0))),
+            ("movsd qword ptr [rbp + 1032], xmm1", &[0xf2, 0x0f, 0x11, 0x8d, 0x08, 0x04, 0x00, 0x00], bytes(|a| a.fp_store(true, mem(RBP, 1032), 1))),
+            ("addss xmm0, xmm1", &[0xf3, 0x0f, 0x58, 0xc1], bytes(|a| a.fp(Sse::Add, false, 0, 1))),
+            ("subsd xmm2, xmm0", &[0xf2, 0x0f, 0x5c, 0xd0], bytes(|a| a.fp(Sse::Sub, true, 2, 0))),
+            ("mulss xmm0, xmm1", &[0xf3, 0x0f, 0x59, 0xc1], bytes(|a| a.fp(Sse::Mul, false, 0, 1))),
+            ("divsd xmm0, xmm1", &[0xf2, 0x0f, 0x5e, 0xc1], bytes(|a| a.fp(Sse::Div, true, 0, 1))),
+            ("sqrtss xmm0, xmm0", &[0xf3, 0x0f, 0x51, 0xc0], bytes(|a| a.fp(Sse::Sqrt, false, 0, 0))),
+            ("sqrtsd xmm0, xmm1", &[0xf2, 0x0f, 0x51, 0xc1], bytes(|a| a.fp(Sse::Sqrt, true, 0, 1))),
+            ("ucomiss xmm0, xmm1", &[0x0f, 0x2e, 0xc1], bytes(|a| a.ucomis(false, 0, 1))),
+            ("ucomisd xmm0, xmm1", &[0x66, 0x0f, 0x2e, 0xc1], bytes(|a| a.ucomis(true, 0, 1))),
+            ("cvtsi2ss xmm0, dword ptr [rbp + 1024]", &[0xf3, 0x0f, 0x2a, 0x85, 0x00, 0x04, 0x00, 0x00], bytes(|a| a.cvtsi2s(false, Long, 0, mem(RBP, 1024)))),
+            ("cvtsi2sd xmm0, dword ptr [rbp + 1024]", &[0xf2, 0x0f, 0x2a, 0x85, 0x00, 0x04, 0x00, 0x00], bytes(|a| a.cvtsi2s(true, Long, 0, mem(RBP, 1024)))),
+            ("cvtsi2ss xmm0, rbx", &[0xf3, 0x48, 0x0f, 0x2a, 0xc3], bytes(|a| a.cvtsi2s(false, Quad, 0, Rm::Reg(RBX)))),
+            ("cvtsi2sd xmm0, rbx", &[0xf2, 0x48, 0x0f, 0x2a, 0xc3], bytes(|a| a.cvtsi2s(true, Quad, 0, Rm::Reg(RBX)))),
+            ("cvttss2si rbx, xmm0", &[0xf3, 0x48, 0x0f, 0x2c, 0xd8], bytes(|a| a.cvtts2si(false, Quad, RBX, 0))),
+            ("cvttsd2si rbx, xmm0", &[0xf2, 0x48, 0x0f, 0x2c, 0xd8], bytes(|a| a.cvtts2si(true, Quad, RBX, 0))),
+            ("movd xmm1, ebx", &[0x66, 0x0f, 0x6e, 0xcb], bytes(|a| a.movd_to_xmm(Long, 1, RBX))),
+            ("movq xmm1, rbx", &[0x66, 0x48, 0x0f, 0x6e, 0xcb], bytes(|a| a.movd_to_xmm(Quad, 1, RBX))),
+            ("movd ebx, xmm0", &[0x66, 0x0f, 0x7e, 0xc3], bytes(|a| a.movd_from_xmm(Long, RBX, 0))),
+            ("movq rbx, xmm0", &[0x66, 0x48, 0x0f, 0x7e, 0xc3], bytes(|a| a.movd_from_xmm(Quad, RBX, 0))),
+            ("movq rdx, xmm1", &[0x66, 0x48, 0x0f, 0x7e, 0xca], bytes(|a| a.movd_from_xmm(Quad, RDX, 1))),
+            ("stmxcsr dword ptr [rsp + 52]", &[0x0f, 0xae, 0x5c, 0x24, 0x34], bytes(|a| a.stmxcsr(mem(RSP, 52)))),
+            ("ldmxcsr dword ptr [rsp + 52]", &[0x0f, 0xae, 0x54, 0x24, 0x34], bytes(|a| a.ldmxcsr(mem(RSP, 52)))),
+            ("jp next; .skip 256; next:", &[0x0f, 0x8a, 0x00, 0x01, 0x00, 0x00], bytes(|a| { let l = a.label(); a.jcc(P, l); a.emit(&[0x90; 256]); a.bind(l) })[..6].to_vec()),
+            ("movsxd rdx, ebx", &[0x48, 0x63, 0xd3], bytes(|a| a.movsxd(RDX, Rm::Reg(RBX)))),
+            ("cmovb ebx, edx", &[0x0f, 0x42, 0xda], bytes(|a| a.cmov(B, RBX, Rm::Reg(RDX)))),
+            ("test dword ptr [rsp + 52], 17", &[0xf7, 0x44, 0x24, 0x34, 0x11, 0x00, 0x00, 0x00], bytes(|a| a.test_imm(mem(RSP, 52), 17))),
+            ("or dword ptr [rbp + 1280], edx", &[0x09, 0x95, 0x00, 0x05, 0x00, 0x00], bytes(|a| a.alu_to(Alu::Or, Long, mem(RBP, 1280), RDX))),
+            ("movq xmm0, qword ptr [rbp + 1024]", &[0xf3, 0x0f, 0x7e, 0x85, 0x00, 0x04, 0x00, 0x00], bytes(|a| a.movq_load(0, mem(RBP, 1024)))),
+            ("movq qword ptr [rbp + 1024], xmm1", &[0x66, 0x0f, 0xd6, 0x8d, 0x00, 0x04, 0x00, 0x00], bytes(|a| a.movq_store(mem(RBP, 1024), 1))),
+            ("movdqu xmm1, xmmword ptr [rbp + 1024]", &[0xf3, 0x0f, 0x6f, 0x8d, 0x00, 0x04, 0x00, 0x00], bytes(|a| a.movdqu_load(1, mem(RBP, 1024)))),
+            ("movdqu xmmword ptr [rbp + 1024], xmm0", &[0xf3, 0x0f, 0x7f, 0x85, 0x00, 0x04, 0x00, 0x00], bytes(|a| a.movdqu_store(mem(RBP, 1024), 0))),
+            ("movdqa xmm2, xmm0", &[0x66, 0x0f, 0x6f, 0xd0], bytes(|a| a.packed(MOVDQA, 2, 0))),
+            ("movdqa xmm9, xmm3", &[0x66, 0x44, 0x0f, 0x6f, 0xcb], bytes(|a| a.packed(MOVDQA, 9, 3))),
+            ("paddb xmm0, xmm1", &[0x66, 0x0f, 0xfc, 0xc1], bytes(|a| a.packed(PADD, 0, 1))),
+            ("paddw xmm0, xmm1", &[0x66, 0x0f, 0xfd, 0xc1], bytes(|a| a.packed(PADD + 1, 0, 1))),
+            ("paddd xmm3, xmm5", &[0x66, 0x0f, 0xfe, 0xdd], bytes(|a| a.packed(PADD + 2, 3, 5))),
+            ("paddq xmm0, xmm1", &[0x66, 0x0f, 0xd4, 0xc1], bytes(|a| a.packed(PADDQ, 0, 1))),
+            ("psubb xmm0, xmm1", &[0x66, 0x0f, 0xf8, 0xc1], bytes(|a| a.packed(PSUB, 0, 1))),
+            ("psubw xmm0, xmm1", &[0x66, 0x0f, 0xf9, 0xc1], bytes(|a| a.packed(PSUB + 1, 0, 1))),
+            ("psubd xmm0, xmm1", &[0x66, 0x0f, 0xfa, 0xc1], bytes(|a| a.packed(PSUB + 2, 0, 1))),
+            ("psubq xmm0, xmm1", &[0x66, 0x0f, 0xfb, 0xc1], bytes(|a| a.packed(PSUB + 3, 0, 1))),
+            ("pcmpgtb xmm0, xmm1", &[0x66, 0x0f, 0x64, 0xc1], bytes(|a| a.packed(PCMPGT, 0, 1))),
+            ("pcmpgtw xmm0, xmm1", &[0x66, 0x0f, 0x65, 0xc1], bytes(|a| a.packed(PCMPGT + 1, 0, 1))),
+            ("pcmpgtd xmm9, xmm6", &[0x66, 0x44, 0x0f, 0x66, 0xce], bytes(|a| a.packed(PCMPGT + 2, 9, 6))),
+            ("pcmpeqb xmm0, xmm1", &[0x66, 0x0f, 0x74, 0xc1], bytes(|a| a.packed(PCMPEQ, 0, 1))),
+            ("pcmpeqw xmm0, xmm1", &[0x66, 0x0f, 0x75, 0xc1], bytes(|a| a.packed(PCMPEQ + 1, 0, 1))),
+            ("pcmpeqd xmm2, xmm7", &[0x66, 0x0f, 0x76, 0xd7], bytes(|a| a.packed(PCMPEQ + 2, 2, 7))),
+            ("pand xmm2, xmm4", &[0x66, 0x0f, 0xdb, 0xd4], bytes(|a| a.packed(PAND, 2, 4))),
+            ("pandn xmm2, xmm3", &[0x66, 0x0f, 0xdf, 0xd3], bytes(|a| a.packed(PANDN, 2, 3))),
+            ("por xmm8, xmm9", &[0x66, 0x45, 0x0f, 0xeb, 0xc1], bytes(|a| a.packed(POR, 8, 9))),
+            ("por xmm8, xmm2", &[0x66, 0x44, 0x0f, 0xeb, 0xc2], bytes(|a| a.packed(POR, 8, 2))),
+            ("pxor xmm8, xmm8", &[0x66, 0x45, 0x0f, 0xef, 0xc0], bytes(|a| a.packed(PXOR, 8, 8))),
+            ("pxor xmm0, xmm2", &[0x66, 0x0f, 0xef, 0xc2], bytes(|a| a.packed(PXOR, 0, 2))),
+            ("psrlw xmm1, 3", &[0x66, 0x0f, 0x71, 0xd1, 0x03], bytes(|a| a.packed_shift(1, false, 1, 3))),
+            ("psrld xmm1, 31", &[0x66, 0x0f, 0x72, 0xd1, 0x1f], bytes(|a| a.packed_shift(2, false, 1, 31))),
+            ("psrlq xmm1, 64", &[0x66, 0x0f, 0x73, 0xd1, 0x40], bytes(|a| a.packed_shift(3, false, 1, 64))),
+            ("psraw xmm1, 16", &[0x66, 0x0f, 0x71, 0xe1, 0x10], bytes(|a| a.packed_shift(1, true, 1, 16))),
+            ("psrad xmm3, 31", &[0x66, 0x0f, 0x72, 0xe3, 0x1f], bytes(|a| a.packed_shift(2, true, 3, 31))),
+            ("pshufd xmm4, xmm4, 0", &[0x66, 0x0f, 0x70, 0xe4, 0x00], bytes(|a| a.pshufd(4, 4, 0))),
+            ("cmpeqps xmm0, xmm1", &[0x0f, 0xc2, 0xc1, 0x00], bytes(|a| a.cmpps(0, 1, 0))),
+            ("cmpltps xmm1, xmm0", &[0x0f, 0xc2, 0xc8, 0x01], bytes(|a| a.cmpps(1, 0, 1))),
+            ("cmpleps xmm1, xmm0", &[0x0f, 0xc2, 0xc8, 0x02], bytes(|a| a.cmpps(1, 0, 2))),
+            ("pmovmskb ebx, xmm8", &[0x66, 0x41, 0x0f, 0xd7, 0xd8], bytes(|a| a.pmovmskb(RBX, 8))),
+            ("movd xmm4, ebx", &[0x66, 0x0f, 0x6e, 0xe3], bytes(|a| a.movd_to_xmm(Long, 4, RBX))),
             ("cdq", &[0x99], bytes(|a| a.cdq())),
             ("lahf", &[0x9f], bytes(|a| a.lahf())),
             ("sahf", &[0x9e], bytes(|a| a.sahf())),

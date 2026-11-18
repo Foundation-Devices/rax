@@ -15,13 +15,14 @@ include = [
 
 [features]
 default = ["jit"]
-# The compiler from blocks to host code. It exists only on AArch64 macOS and Linux: with
-# another host, or with no feature, the engine has the fast interpreter only.
+# The compiler from blocks to host code. It exists only on AArch64 macOS, AArch64 Linux
+# and x86-64 Linux: with another host, or with no feature, the engine has the fast
+# interpreter only.
 jit = []
 
 [dependencies]
 rax = { path = "..", default-features = false }
 
 # The compiler maps its code with mmap.
-[target.'cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))'.dependencies]
+[target.'cfg(any(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")), all(target_arch = "x86_64", target_os = "linux")))'.dependencies]
 libc = "0.2"

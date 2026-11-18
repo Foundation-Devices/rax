@@ -2,8 +2,8 @@
 //!
 //! This file has what is the same for each host: the blocks with code, the branches
 //! between the code of one page, the table of the jumps, the flags that an instruction
-//! must keep. A code generator (`aarch64`) makes the code of one block. The compiled code
-//! has only the cases that need no call. Each other case leaves the code before its
+//! must keep. A code generator (`aarch64`, `x86_64`) makes the code of one block. The
+//! compiled code has only the cases that need no call. Each other case leaves the code before its
 //! instruction, with the registers as before it, and the caller runs the instruction with
 //! the interpreter.
 
@@ -17,8 +17,17 @@ use rax::arm::vfp::VfpState;
 
 use super::{Alu, Block, COND_ALWAYS, Carry, Op, PC, Step};
 
+#[cfg_attr(all(target_arch = "x86_64", target_os = "linux"), allow(dead_code))]
 mod aarch64;
+#[cfg_attr(
+    not(all(target_arch = "x86_64", target_os = "linux")),
+    allow(dead_code)
+)]
+mod x86_64;
+#[cfg(not(all(target_arch = "x86_64", target_os = "linux")))]
 use aarch64 as host;
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+use x86_64 as host;
 
 // Flags, as the bits 31:28 of NZCV.
 const N: u8 = 8;
@@ -217,7 +226,11 @@ unsafe fn flush_code(start: usize, end: usize) {
 
 /// The pages of the code are not writable: this makes the pages of the range writable
 /// for the time of the copy.
-#[cfg(all(feature = "jit", target_arch = "aarch64", target_os = "linux"))]
+#[cfg(all(
+    feature = "jit",
+    target_os = "linux",
+    any(target_arch = "aarch64", target_arch = "x86_64")
+))]
 unsafe fn write_code(start: *mut u8, code: &[u8]) {
     let length = code.len();
     // SAFETY: a call with no effect.
@@ -232,6 +245,8 @@ unsafe fn write_code(start: *mut u8, code: &[u8]) {
         std::ptr::copy_nonoverlapping(code.as_ptr(), start, code.len());
         let executable = libc::mprotect(first as *mut _, pages, libc::PROT_READ | libc::PROT_EXEC);
         assert_eq!(executable, 0, "mprotect of the code");
+        // An x86-64 host sees a write to code with no call.
+        #[cfg(target_arch = "aarch64")]
         flush_code(start as usize, start as usize + length);
     }
 }
@@ -239,8 +254,10 @@ unsafe fn write_code(start: *mut u8, code: &[u8]) {
 /// `Jit::new` gives no compiler on this host.
 #[cfg(not(all(
     feature = "jit",
-    target_arch = "aarch64",
-    any(target_os = "macos", target_os = "linux")
+    any(
+        all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
 )))]
 unsafe fn write_code(_start: *mut u8, _code: &[u8]) {
     unreachable!();
@@ -415,13 +432,15 @@ fn always_jumps(op: Op) -> bool {
 }
 
 impl Jit {
-    /// None when the crate has no feature `jit`, or the host is not AArch64 macOS or
-    /// Linux, or gives no memory for code, or has FP controls that are not the ones of
-    /// the compiled FP code.
+    /// None when the crate has no feature `jit`, or the host is not AArch64 macOS,
+    /// AArch64 Linux or x86-64 Linux, or gives no memory for code, or has FP controls
+    /// that are not the ones of the compiled FP code.
     #[cfg(not(all(
         feature = "jit",
-        target_arch = "aarch64",
-        any(target_os = "macos", target_os = "linux")
+        any(
+            all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")),
+            all(target_arch = "x86_64", target_os = "linux")
+        )
     )))]
     pub fn new() -> Option<Jit> {
         None
@@ -429,16 +448,31 @@ impl Jit {
 
     #[cfg(all(
         feature = "jit",
-        target_arch = "aarch64",
-        any(target_os = "macos", target_os = "linux")
+        any(
+            all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")),
+            all(target_arch = "x86_64", target_os = "linux")
+        )
     ))]
     pub fn new() -> Option<Jit> {
-        let fpcr: u64;
-        // SAFETY: a read of a register with no effect.
-        unsafe { std::arch::asm!("mrs {}, fpcr", out(reg) fpcr) };
-        // Round to nearest, no flush to zero, no default NaN, no trap.
-        if fpcr != 0 {
-            return None;
+        #[cfg(target_arch = "aarch64")]
+        {
+            let fpcr: u64;
+            // SAFETY: a read of a register with no effect.
+            unsafe { std::arch::asm!("mrs {}, fpcr", out(reg) fpcr) };
+            // Round to nearest, no flush to zero, no default NaN, no trap.
+            if fpcr != 0 {
+                return None;
+            }
+        }
+        #[cfg(target_arch = "x86_64")]
+        {
+            let mut mxcsr = 0_u32;
+            // SAFETY: a store of a register to this variable.
+            unsafe { std::arch::asm!("stmxcsr [{}]", in(reg) &raw mut mxcsr, options(nostack)) };
+            // The exceptions are in the low 6 bits.
+            if mxcsr & !0x3f != x86_64::MXCSR_DEFAULT {
+                return None;
+            }
         }
         // macOS: a MAP_JIT mapping, which each thread can write or run (`write_code`).
         #[cfg(target_os = "macos")]
@@ -588,6 +622,7 @@ impl Jit {
     pub fn left_at(&mut self, block: &Block, index: usize) {
         let compilations = block.fp_compilations.get();
         if block.steps[index].op.is_fp()
+            && host::has_fp_code(block.steps[index].op)
             && block.admitted[index].get() != 0
             && compilations < MAX_FP_COMPILATIONS
         {

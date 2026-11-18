@@ -12,7 +12,7 @@ use rax::arm::instructions::ExclusiveMonitor;
 use rax::arm::vfp::{self, Fpscr, VfpState};
 use rax::arm::{Armv7Cpu, DecodedInsn, Decoder, ExecutionState, Mnemonic, Psr};
 
-// With no compiler, the code that makes its entry and exit code has no use.
+// The code for an other host, or for each host with no compiler, has no use.
 #[cfg_attr(
     not(all(
         feature = "jit",
@@ -26,8 +26,10 @@ pub mod cache;
 #[cfg_attr(
     not(all(
         feature = "jit",
-        target_arch = "aarch64",
-        any(target_os = "macos", target_os = "linux")
+        any(
+            all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")),
+            all(target_arch = "x86_64", target_os = "linux")
+        )
     )),
     allow(dead_code)
 )]
@@ -35,8 +37,10 @@ pub mod jit;
 #[cfg(test)]
 mod tests;
 pub mod tlb;
-// No code generator uses this assembler.
-#[allow(dead_code)]
+#[cfg_attr(
+    not(all(feature = "jit", target_arch = "x86_64", target_os = "linux")),
+    allow(dead_code)
+)]
 mod x64;
 
 pub const MAX_INSTRUCTIONS: usize = 64;
