@@ -78,15 +78,11 @@ const SAVED_FLAGS: usize = 32;
 const FP_USED: usize = 40;
 /// 32 bits for a read or a write of the MXCSR.
 const MXCSR: usize = 44;
-/// 32 bits for the MXCSR before an instruction with FP arithmetic.
-const MXCSR_BEFORE: usize = 48;
 /// With the return address and the six saved registers, a multiple of 16.
 const FRAME: u32 = 56;
 
 /// Round to nearest, no flush to zero, no trap, no exception.
 pub(super) const MXCSR_DEFAULT: u32 = 0x1f80;
-const MXCSR_INVALID: u32 = 1;
-const MXCSR_UNDERFLOW: u32 = 1 << 4;
 /// Division by zero, overflow and inexact in the FPSCR: the bits of the MXCSR one place
 /// to the right.
 const FPSCR_FROM_MXCSR: u32 = 0x16;
@@ -111,6 +107,27 @@ struct SlowAccess {
     mode: Index,
     offset: i32,
     address: Reg,
+}
+
+/// A product or a quotient that is 0: the code that looks at the operands.
+struct ZeroResult {
+    start: Label,
+    done: Label,
+    index: usize,
+    double: bool,
+    /// The register with the second operand of a product; a quotient has none.
+    second: Option<Reg>,
+    /// The guest register of the first operand.
+    first: u8,
+}
+
+/// The results of an FP operation that are 0 with an underflow.
+#[derive(Clone, Copy, PartialEq)]
+enum Zero {
+    /// A sum, a difference or a square root that is 0 has no rounding.
+    Exact,
+    Product,
+    Quotient,
 }
 
 /// The carry flag after an operation that writes N and Z from its result.
@@ -226,9 +243,7 @@ struct Compiler<'a> {
     /// For each instruction, the code that leaves before it.
     leaves: Vec<Option<Label>>,
     slow: Vec<SlowAccess>,
-    /// The instructions with FP arithmetic, and the code that leaves before each one
-    /// after a result that is not sure.
-    unsure: Vec<(usize, Label)>,
+    zeros: Vec<ZeroResult>,
     /// The code of the guest addresses in the physical page of the block.
     entries: &'a HashMap<u32, usize>,
     /// The branches to guest addresses in the page with no code: the address and the
@@ -1495,30 +1510,22 @@ impl Compiler<'_> {
         self.fp.fpscr & FPSCR_MODES == 0
     }
 
-    /// The label of the code that leaves before the FP instruction `index` when its
-    /// result is not sure. The first call is before the FP arithmetic of the instruction.
-    fn unsure(&mut self, index: usize) -> Label {
-        if let Some(&(_, label)) = self.unsure.iter().find(|(at, _)| *at == index) {
-            return label;
-        }
-        // The exceptions of a result that is not sure are not all those of the guest.
-        self.asm.stmxcsr(mem(RSP, MXCSR_BEFORE));
-        let label = self.asm.label();
-        self.unsure.push((index, label));
-        label
-    }
-
     /// Leaves before the instruction `index` when the result of the FP arithmetic in
     /// `register` is not sure to be the result of the guest with its flags. It is sure
-    /// when it is 0 or a number with an exponent that is not the largest or one of the
-    /// two smallest, and the host saw no invalid operation and no underflow. Then no
-    /// operand was a NaN, and the host and the guest have the same rule for each flag:
-    /// they differ for a result at the limit of the normal numbers, where the guest
-    /// looks for an underflow before it rounds and the host after.
-    fn fp_guard(&mut self, index: usize, double: bool, register: Reg) {
-        let unsure = self.unsure(index);
+    /// when it is a number with an exponent that is not the largest or one of the two
+    /// smallest: then the operation was not invalid and had no underflow, and the host
+    /// and the guest have the same rule for each other flag. They differ for a result at
+    /// the limit of the normal numbers, where the guest looks for an underflow before it
+    /// rounds and the host after. A result that is 0 is sure when it has no rounding
+    /// (`zero`, with `first` the guest register of the first operand and X1 the second).
+    ///
+    /// The exceptions of a result that is not sure stay in the MXCSR. The division by
+    /// zero, the overflow and the inexact result are also those of the guest for this
+    /// operation, and the code reads no other one.
+    fn fp_guard(&mut self, index: usize, double: bool, register: Reg, zero: Zero, first: u8) {
+        let unsure = self.leave_at(index);
         let a = &mut self.asm;
-        let exact_zero = a.label();
+        let (is_zero, done) = (a.label(), a.label());
         let (size, exponent, exponents) = if double {
             (Quad, 53, 2047)
         } else {
@@ -1526,15 +1533,41 @@ impl Compiler<'_> {
         };
         a.movd_from_xmm(size, T0, register);
         a.shift(Shift::Shl, size, Rm::Reg(T0), 1);
-        a.jcc(x64::E, exact_zero);
+        a.jcc(x64::E, if zero == Zero::Exact { done } else { is_zero });
         a.shift(Shift::Shr, size, Rm::Reg(T0), exponent);
         a.lea(Long, T0, mem(T0, -2_i32 as usize));
         a.alu_imm(x64::Alu::Cmp, Long, Rm::Reg(T0), exponents - 2);
         a.jcc(x64::AE, unsure);
-        a.bind(exact_zero);
-        a.stmxcsr(mem(RSP, MXCSR));
-        a.test_imm(mem(RSP, MXCSR), MXCSR_INVALID | MXCSR_UNDERFLOW);
-        a.jcc(x64::NE, unsure);
+        a.bind(done);
+        if zero != Zero::Exact {
+            self.zeros.push(ZeroResult {
+                start: is_zero,
+                done,
+                index,
+                double,
+                second: (zero == Zero::Product).then_some(X1),
+                first,
+            });
+        }
+    }
+
+    /// The code for a product or a quotient that is 0. It has no rounding when an
+    /// operand of the product, or the first operand of the quotient, is 0. Else it has
+    /// an underflow, or the second operand of the quotient is an infinity.
+    fn zero_result(&mut self, zero: &ZeroResult) {
+        let unsure = self.leave_at(zero.index);
+        let size = if zero.double { Quad } else { Long };
+        let a = &mut self.asm;
+        a.bind(zero.start);
+        if let Some(second) = zero.second {
+            a.movd_from_xmm(size, T0, second);
+            a.shift(Shift::Shl, size, Rm::Reg(T0), 1);
+            a.jcc(x64::E, zero.done);
+        }
+        a.mov(size, T0, fp_reg(zero.double, zero.first));
+        a.shift(Shift::Shl, size, Rm::Reg(T0), 1);
+        a.jcc(x64::E, zero.done);
+        a.jmp(unsure);
     }
 
     /// The code of the FP arithmetic of the instruction `index`.
@@ -1547,17 +1580,16 @@ impl Compiler<'_> {
                 n,
                 m,
             } => {
-                self.unsure(index);
                 self.asm.fp_load(double, X0, fp_reg(double, n));
                 self.asm.fp_load(double, X1, fp_reg(double, m));
-                let op = match kind {
-                    FpBinary::Add => Sse::Add,
-                    FpBinary::Sub => Sse::Sub,
-                    FpBinary::Mul | FpBinary::Nmul => Sse::Mul,
-                    FpBinary::Div => Sse::Div,
+                let (op, zero) = match kind {
+                    FpBinary::Add => (Sse::Add, Zero::Exact),
+                    FpBinary::Sub => (Sse::Sub, Zero::Exact),
+                    FpBinary::Mul | FpBinary::Nmul => (Sse::Mul, Zero::Product),
+                    FpBinary::Div => (Sse::Div, Zero::Quotient),
                 };
                 self.asm.fp(op, double, X0, X1);
-                self.fp_guard(index, double, X0);
+                self.fp_guard(index, double, X0, zero, n);
                 self.asm.fp_store(double, fp_reg(double, d), X0);
                 if kind == FpBinary::Nmul {
                     self.negate(double, d);
@@ -1570,11 +1602,10 @@ impl Compiler<'_> {
                 n,
                 m,
             } => {
-                self.unsure(index);
                 self.asm.fp_load(double, X0, fp_reg(double, n));
                 self.asm.fp_load(double, X1, fp_reg(double, m));
                 self.asm.fp(Sse::Mul, double, X0, X1);
-                self.fp_guard(index, double, X0);
+                self.fp_guard(index, double, X0, Zero::Product, n);
                 let a = &mut self.asm;
                 // The result of the guest is (d or -d) + (product or -product).
                 let result = match kind {
@@ -1608,14 +1639,13 @@ impl Compiler<'_> {
                         X1
                     }
                 };
-                self.fp_guard(index, double, result);
+                self.fp_guard(index, double, result, Zero::Exact, n);
                 self.asm.fp_store(double, fp_reg(double, d), result);
             }
             Op::FpUnary { double, d, m, .. } => {
-                self.unsure(index);
                 self.asm.fp_load(double, X0, fp_reg(double, m));
                 self.asm.fp(Sse::Sqrt, double, X0, X0);
-                self.fp_guard(index, double, X0);
+                self.fp_guard(index, double, X0, Zero::Exact, m);
                 self.asm.fp_store(double, fp_reg(double, d), X0);
             }
             Op::FpCompare {
@@ -1625,7 +1655,7 @@ impl Compiler<'_> {
                 m,
                 ..
             } => {
-                let unsure = self.unsure(index);
+                let unsure = self.leave_at(index);
                 let a = &mut self.asm;
                 a.fp_load(double, X0, fp_reg(double, d));
                 if with_zero {
@@ -1660,7 +1690,7 @@ impl Compiler<'_> {
                     FpConvert::F64ToSigned => (false, true, false),
                     FpConvert::F64ToUnsigned => (false, true, true),
                 };
-                let unsure = (!to_float).then(|| self.unsure(index));
+                let unsure = self.leave_at(index);
                 let a = &mut self.asm;
                 match (to_float, unsigned) {
                     (true, false) => {
@@ -1672,20 +1702,33 @@ impl Compiler<'_> {
                         a.cvtsi2s(double, Quad, X0, Rm::Reg(T0));
                         a.fp_store(double, fp_reg(double, d), X0);
                     }
-                    (false, _) => {
-                        // The guest has the nearest limit for a number out of its
-                        // range, and the host has no such result: a number of 64 bits
-                        // shows the numbers out of the range of 32 bits.
+                    // The guest has the nearest limit for a number out of its range,
+                    // with the invalid operation and never the inexact result. The
+                    // host has no such result.
+                    (false, false) => {
+                        // The host gives this number, and no inexact result, for each
+                        // number out of the range and for a NaN.
+                        const OUT_OF_RANGE: u32 = 1 << 31;
+                        a.fp_load(double, X0, fp_reg(double, m));
+                        a.cvtts2si(double, Long, T0, X0);
+                        a.alu_imm(x64::Alu::Cmp, Long, Rm::Reg(T0), OUT_OF_RANGE);
+                        a.jcc(x64::E, unsure);
+                        a.mov_to(Long, sreg(d), T0);
+                    }
+                    (false, true) => {
+                        // The host has signed numbers only, and a number out of the
+                        // range of 32 bits can be inexact in 64 bits: the conversion is
+                        // for the numbers from +0 to below 2^32, which are below this
+                        // limit as unsigned integers. A negative number is above it.
+                        let (high, limit) = if double {
+                            (sreg(m * 2 + 1), 0x41f0_0000)
+                        } else {
+                            (sreg(m), 0x4f80_0000)
+                        };
+                        a.alu_imm(x64::Alu::Cmp, Long, high, limit);
+                        a.jcc(x64::AE, unsure);
                         a.fp_load(double, X0, fp_reg(double, m));
                         a.cvtts2si(double, Quad, T0, X0);
-                        if unsigned {
-                            a.mov(Quad, T1, Rm::Reg(T0));
-                            a.shift(Shift::Shr, Quad, Rm::Reg(T1), 32);
-                        } else {
-                            a.movsxd(T1, Rm::Reg(T0));
-                            a.alu(x64::Alu::Cmp, Quad, T1, Rm::Reg(T0));
-                        }
-                        a.jcc(x64::NE, unsure.unwrap());
                         a.mov_to(Long, sreg(d), T0);
                     }
                 }
@@ -2343,11 +2386,8 @@ impl Compiler<'_> {
         for access in std::mem::take(&mut self.slow) {
             self.slow_access(&access);
         }
-        for (index, label) in std::mem::take(&mut self.unsure) {
-            let leave = self.leave_at(index);
-            self.asm.bind(label);
-            self.asm.ldmxcsr(mem(RSP, MXCSR_BEFORE));
-            self.asm.jmp(leave);
+        for zero in std::mem::take(&mut self.zeros) {
+            self.zero_result(&zero);
         }
         for index in 0..self.leaves.len() {
             if let Some(label) = self.leaves[index] {
@@ -2388,7 +2428,7 @@ pub(super) fn compile(unit: Unit) -> Option<(Vec<u8>, Links)> {
         number: unit.number,
         leaves: vec![None; unit.block.len() + 1],
         slow: Vec::new(),
-        unsure: Vec::new(),
+        zeros: Vec::new(),
         entries: unit.entries,
         links: Vec::new(),
         host_flags: 0,
