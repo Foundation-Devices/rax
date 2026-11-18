@@ -138,6 +138,30 @@ fn programs_with_exceptions_and_interrupts_run_the_same_with_each_engine() {
 }
 
 #[test]
+fn programs_run_the_same_with_a_block_cache_that_is_full_after_five_blocks() {
+    let mut trio = Trio::new();
+    for machine in &mut trio.machines {
+        machine.blocks.limit = 5;
+    }
+    cases(
+        "programs_run_the_same_with_a_block_cache_that_is_full_after_five_blocks",
+        0x0a11_ce5e_ed00_000f,
+        3_000,
+        |random| {
+            let kind = [Programs::Plain, Programs::Patches, Programs::System];
+            let kind = kind[random.below(3) as usize];
+            let case = random_program_case(random, kind);
+            trio.run(&case).map(|_| ())
+        },
+    );
+    eprintln!("{:?} {:?}", trio.compiled_share(), trio.totals);
+    if let Some(machine) = trio.compiled() {
+        assert!(machine.jit.as_ref().unwrap().stats.flushes > 3_000);
+    }
+    assert!(trio.compiled_share().is_none_or(|share| share > 0.2));
+}
+
+#[test]
 fn an_event_at_each_place_of_the_blocks_keeps_the_state_exact() {
     let mut trio = Trio::new();
     for seed in 1..=6u64 {

@@ -7,6 +7,8 @@ use crate::{Block, PAGE_SIZE};
 
 const SLOTS: usize = 1 << 18;
 const LINKS: usize = 1 << 12;
+/// The blocks of an operating system take about 3.5 KiB each: 450 MiB for this count.
+pub const MAX_BLOCKS: usize = 1 << 17;
 
 /// The block at a virtual address, for one privilege, one mapping and one removal count.
 #[derive(Clone, Default)]
@@ -30,6 +32,10 @@ pub struct BlockCache {
     links: Vec<Link>,
     /// The count of the removals of blocks: a link of an older count is not valid.
     removals: u64,
+    /// The blocks that the cache made after the last `clear`.
+    made: usize,
+    /// The count of blocks that makes the cache full.
+    pub limit: usize,
 }
 
 impl Default for BlockCache {
@@ -39,6 +45,8 @@ impl Default for BlockCache {
             page_slots: HashMap::new(),
             links: vec![Link::default(); LINKS],
             removals: 0,
+            made: 0,
+            limit: MAX_BLOCKS,
         }
     }
 }
@@ -100,12 +108,29 @@ impl BlockCache {
             return (!block.is_empty()).then(|| block.clone());
         }
         let block = Rc::new(translate());
+        self.made += 1;
         self.slots[slot] = Some((key, block.clone()));
         self.page_slots
             .entry(place & !(PAGE_SIZE - 1))
             .or_default()
             .push(slot);
         (!block.is_empty()).then_some(block)
+    }
+
+    /// True when the cache made `limit` blocks: `clear` is due, or else the memory of the
+    /// blocks has no limit.
+    #[inline]
+    pub fn is_full(&self) -> bool {
+        self.made >= self.limit
+    }
+
+    /// Removes all the blocks. `Jit::flush` removes the blocks that have code.
+    pub fn clear(&mut self) {
+        self.removals += 1;
+        self.slots.fill(None);
+        self.page_slots.clear();
+        self.links.fill(Link::default());
+        self.made = 0;
     }
 
     /// Removes the blocks of pages, after a write to them.

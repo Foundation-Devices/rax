@@ -2233,8 +2233,8 @@ impl Jit {
         self.stats.code_bytes = self.used;
     }
 
-    /// Removes all the code.
-    fn flush(&mut self) {
+    /// Removes all the code and the blocks of the code. No code runs now.
+    pub fn flush(&mut self) {
         self.used = self.stubs_end;
         self.blocks.clear();
         self.pages.clear();

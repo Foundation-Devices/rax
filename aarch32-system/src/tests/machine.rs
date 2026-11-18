@@ -379,6 +379,7 @@ pub struct Counts {
     pub compiled_leaves: u64,
     pub translated_blocks: u64,
     pub changed_code_pages: u64,
+    pub block_cache_flushes: u64,
 }
 
 impl Counts {
@@ -391,6 +392,7 @@ impl Counts {
         self.compiled_leaves += other.compiled_leaves;
         self.translated_blocks += other.translated_blocks;
         self.changed_code_pages += other.changed_code_pages;
+        self.block_cache_flushes += other.block_cache_flushes;
     }
 }
 
@@ -750,6 +752,13 @@ impl Machine {
                 pages.iter().for_each(|&page| jit.remove_page(page));
             }
             self.blocks.remove_pages(pages);
+        }
+        if self.blocks.is_full() {
+            self.blocks.clear();
+            if let Some(jit) = &mut self.jit {
+                jit.flush();
+            }
+            self.counts.block_cache_flushes += 1;
         }
         let thumb = self.cpu.cpsr.t;
         let pc = self.cpu.regs[15];
