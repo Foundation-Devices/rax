@@ -53,10 +53,11 @@ impl<'a, M: ArmMemory> Executor<'a, M> {
     /// Condition evaluation shared with enclosing-PE memory/monitor bridges.
     pub(crate) fn condition_matches(&self, insn: &DecodedInsn) -> bool {
         // Thumb IT state predicates the following instruction(s); the IT
-        // instruction itself is unconditional and installs the state.
+        // instruction itself is unconditional and installs the state, and
+        // BKPT runs in each IT state.
         let cond = if insn.state.is_thumb()
             && self.cpu.cpsr.in_it_block()
-            && insn.mnemonic != Mnemonic::IT
+            && !matches!(insn.mnemonic, Mnemonic::IT | Mnemonic::BKPT)
         {
             Some(Condition::from_bits(self.cpu.cpsr.it_condition()))
         } else {
