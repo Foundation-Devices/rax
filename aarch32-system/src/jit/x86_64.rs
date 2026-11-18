@@ -76,8 +76,10 @@ const SAVED_FLAGS: usize = 40;
 const FP_USED: usize = 48;
 /// 32 bits for a read or a write of the MXCSR.
 const MXCSR: usize = 52;
+/// 32 bits for the MXCSR before an instruction with FP arithmetic.
+const MXCSR_BEFORE: usize = 56;
 /// With the return address and the six saved registers, a multiple of 16.
-const FRAME: u32 = 56;
+const FRAME: u32 = 72;
 
 /// Round to nearest, no flush to zero, no trap, no exception.
 pub(super) const MXCSR_DEFAULT: u32 = 0x1f80;
@@ -1492,11 +1494,13 @@ impl Compiler<'_> {
     }
 
     /// The label of the code that leaves before the FP instruction `index` when its
-    /// result is not sure.
+    /// result is not sure. The first call is before the FP arithmetic of the instruction.
     fn unsure(&mut self, index: usize) -> Label {
         if let Some(&(_, label)) = self.unsure.iter().find(|(at, _)| *at == index) {
             return label;
         }
+        // The exceptions of a result that is not sure are not all those of the guest.
+        self.asm.stmxcsr(mem(RSP, MXCSR_BEFORE));
         let label = self.asm.label();
         self.unsure.push((index, label));
         label
@@ -1541,6 +1545,7 @@ impl Compiler<'_> {
                 n,
                 m,
             } => {
+                self.unsure(index);
                 self.asm.fp_load(double, X0, fp_reg(double, n));
                 self.asm.fp_load(double, X1, fp_reg(double, m));
                 let op = match kind {
@@ -1563,6 +1568,7 @@ impl Compiler<'_> {
                 n,
                 m,
             } => {
+                self.unsure(index);
                 self.asm.fp_load(double, X0, fp_reg(double, n));
                 self.asm.fp_load(double, X1, fp_reg(double, m));
                 self.asm.fp(Sse::Mul, double, X0, X1);
@@ -1604,6 +1610,7 @@ impl Compiler<'_> {
                 self.asm.fp_store(double, fp_reg(double, d), result);
             }
             Op::FpUnary { double, d, m, .. } => {
+                self.unsure(index);
                 self.asm.fp_load(double, X0, fp_reg(double, m));
                 self.asm.fp(Sse::Sqrt, double, X0, X0);
                 self.fp_guard(index, double, X0);
@@ -2335,15 +2342,10 @@ impl Compiler<'_> {
             self.slow_access(&access);
         }
         for (index, label) in std::mem::take(&mut self.unsure) {
-            // The next FP arithmetic must not see this invalid operation or underflow.
             let leave = self.leave_at(index);
-            let a = &mut self.asm;
-            a.bind(label);
-            a.stmxcsr(mem(RSP, MXCSR));
-            let kept = !(MXCSR_INVALID | MXCSR_UNDERFLOW);
-            a.alu_imm(x64::Alu::And, Long, mem(RSP, MXCSR), kept);
-            a.ldmxcsr(mem(RSP, MXCSR));
-            a.jmp(leave);
+            self.asm.bind(label);
+            self.asm.ldmxcsr(mem(RSP, MXCSR_BEFORE));
+            self.asm.jmp(leave);
         }
         for index in 0..self.leaves.len() {
             if let Some(label) = self.leaves[index] {
