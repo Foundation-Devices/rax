@@ -36,7 +36,8 @@ its memory and its time to the engine through the interfaces below.
   `Exit::Fault(index)` (a slow access gave a fault; the registers are those before the
   instruction), `Exit::Done`. Compiled code leaves to a guest address, or before one
   instruction (`Jit::run` returns the block and the index): the machine runs that
-  instruction with `Block::run` and a limit of 1.
+  instruction with `Block::run` and a limit of 1, but not after a write to a code page
+  in the same run: the block is old then, and the machine gets the block at the PC again.
 - Invalidation: `BlockCache::remove_pages` and `Jit::remove_page` after a write to a page
   with code; `Tlb::protect_code` when a page gets its first block (a write to it must not
   be direct); `Tlb::set_mmu` and `Tlb::flush` for the CP15 writes. `Tlb::mapping` and
@@ -62,16 +63,58 @@ each exit in the block adds back the instructions that did not run.
 
 ## Tests
 
-`cargo test --release -p rax-aarch32-system`: 1 million random Thumb and A32 blocks.
-The fast interpreter runs against the `Executor` (registers, flags, VFP registers, FPSCR,
-memory), and on AArch64 macOS the compiled code runs against the fast interpreter, entered
-as a machine does (a new block at each entry, calls for half of the pages). The test fails
-when an operation did not run in an engine that has it. The dev profile also passes (it
-found two overflows of the `Executor` that only a build with overflow checks sees).
+All the commands are for the directory of rax. The tests are in `src/tests.rs`,
+`src/tests/` and `src/a64.rs`.
 
-`cargo test --release -p rax-aarch32-system --no-default-features` runs the same test with
-no compiler, as on another host. A second test runs a CP15 cache operation in User mode
-and in a privileged mode in the two engines: the random blocks have a privileged mode only.
+### Quick tier
+
+`cargo test --release -p rax-aarch32-system`: 35 tests in about 30 s on an Apple
+M-series host (110 s of CPU time). `--no-default-features` runs the same tests with no
+compiler, as on another host. The dev profile passes too (its overflow checks see what
+a release build does not): there `RAX_SOAK_SECONDS=40` gives each random test a time
+that its count of cases does not.
+
+A test machine (`tests/machine.rs`) makes the calls of a real machine in the same order
+and runs each program three times: with the `Executor` only (the reference), with the
+fast interpreter, and with the compiled code. The registers, the banks, the VFP state,
+the memory, the exceptions and a hash of the registers at each event are the same, or
+the test fails. A page of its memory can need a call for each access, give an abort, or
+be a device: a read of the device gives the count of the instructions before it, and a
+write moves the next event.
+
+| file | what |
+|---|---|
+| `tests.rs` | 1 million random blocks, fast interpreter and compiled code against the `Executor`; each operation ran in each engine. |
+| `tests/blocks.rs` | Short random programs, also across a page end, with pointers to each kind of page and events at random places. Instructions with random bits: each one with a fast operation runs as the `Executor`. |
+| `tests/engine.rs` | Programs with loops, calls to the other instruction set, IT blocks, table branches, literals, stores to their own instructions, exceptions with handlers, interrupt requests, CPS to each mode. An event at each place of the blocks, the compilation at the ninth run, two addresses with one place in the jump table, a full code buffer. |
+| `tests/mmu.rs` | Two address spaces with other code at the same address, a new table entry with a TLB flush, a second address of the same code, DACR, a page with no write permission, User mode. |
+| `tests/oracle.rs` | Integer instructions (A32 and T32) against a model from the pseudocode of the architecture manual: data processing with each shift, multiplies, saturating and parallel arithmetic, bit fields, extends, divides. |
+| `tests/memory.rs` | Loads and stores against a model: each addressing mode with its writeback, LDRD and STRD, LDM and STM in the four orders, PUSH and POP, the 16-bit forms, loads from the PC, loads of the PC, the alignment rules. |
+| `tests/fp.rs` | VFP instructions against the FP unit of an AArch64 host: arithmetic, fused and not fused multiply-add, compares, conversions with integers and fixed-point numbers, with each rounding mode, flush to zero, default NaN, NaN and denormal operands, and the FPSCR flags. |
+| `tests/neon.rs` | Advanced SIMD instructions on integer elements against a model: 28 operations with three registers of the same length, 16 shifts by an immediate value, 16 operations with two lengths, 26 operations with two registers; each size, D and Q, with QC. |
+| `tests/system.rs` | Each condition with each value of the flags, IT blocks of each shape, the state at each exception entry and after each return, the registers of each mode, MRS and MSR with each field mask. |
+| `tests/corrections.rs` | The cases of the faults that these tests found in the `Executor`. |
+| `a64.rs` | Each instruction of the assembler against the word that clang gives for its text; each of the 1302 logical immediates of 32 bits. |
+
+### Soak tier
+
+`RAX_SOAK_SECONDS=300 cargo test --release -p rax-aarch32-system -- --test-threads 4
+--nocapture`: each of the 16 tests with random cases runs cases for this time and prints
+their count (20 minutes for the command, 80 minutes of CPU time). With `RAX_TEST_SEED=7`
+the tests take an other seed, thus an other run has other cases.
+
+### Ignored tests
+
+`cargo test --release -p rax-aarch32-system -- --ignored` runs two tests that fail, each
+for a fault that is open: the reason is in its `#[ignore]`.
+
+### A failure
+
+A failure prints the seed of its case, the bytes of the program, the registers at the
+start, and the command that runs the case again:
+`RAX_TEST_CASE=0x89ea1da2d2fe8f19 cargo test --release -p rax-aarch32-system <test>`.
+`RAX_TEST_TRACE=1` prints each entry of an engine with the PC and the IT state.
+`RAX_TEST_COLLECT=1` goes on after a failure and prints the count of the failures by kind.
 
 The system-level tests are in `prime-rax`: a boot of an unmodified OS to its first screens,
 compared with the one-instruction interpreter (a hash of the registers at each 4096
