@@ -71,12 +71,16 @@ impl Drop for Replay<'_> {
 /// - `RAX_TEST_CASE`: only the case of this seed.
 /// - `RAX_TEST_SEED`: an other seed for the test.
 /// - `RAX_SOAK_SECONDS`: cases for this time, not for `count`.
+/// - `RAX_TEST_COLLECT`: no stop at a failure. The end has the count of the failures
+///   by the text before " : " in their message, with the first case of each.
 pub fn cases(
     name: &str,
     seed: u64,
     count: u64,
     mut case: impl FnMut(&mut Random) -> Result<(), String>,
 ) {
+    let collect = std::env::var_os("RAX_TEST_COLLECT").is_some();
+    let mut failures: BTreeMap<String, (u64, String)> = BTreeMap::new();
     let mut run = |case_seed, seed, iteration| {
         let replay = Replay {
             name,
@@ -84,25 +88,40 @@ pub fn cases(
             seed,
             iteration,
         };
-        if let Err(message) = case(&mut Random(case_seed)) {
-            panic!("{message}");
-        }
+        let result = case(&mut Random(case_seed));
         std::mem::forget(replay);
+        let Err(message) = result else {
+            return;
+        };
+        let again = format!(
+            "{name}: case seed {case_seed:#x} (seed {seed:#x}, iteration {iteration})\n\
+             again: RAX_TEST_CASE={case_seed:#x} cargo test --release -p rax-aarch32-system {name}"
+        );
+        if !collect {
+            panic!("{message}\n{again}");
+        }
+        let kind = message.split(" : ").next().unwrap().to_string();
+        failures.entry(kind).or_insert((0, format!("{message}\n{again}"))).0 += 1;
     };
     if let Some(case_seed) = number("RAX_TEST_CASE") {
-        return run(case_seed, 0, 0);
+        run(case_seed, 0, 0);
+    } else {
+        let seed = number("RAX_TEST_SEED").unwrap_or(seed);
+        let soak = number("RAX_SOAK_SECONDS").map(Duration::from_secs);
+        let start = Instant::now();
+        let mut iteration = 0;
+        while soak.map_or(iteration < count, |time| start.elapsed() < time) {
+            run(mix(seed, iteration), seed, iteration);
+            iteration += 1;
+        }
+        if soak.is_some() {
+            eprintln!("{name}: {iteration} cases, seed {seed:#x}");
+        }
     }
-    let seed = number("RAX_TEST_SEED").unwrap_or(seed);
-    let soak = number("RAX_SOAK_SECONDS").map(Duration::from_secs);
-    let start = Instant::now();
-    let mut iteration = 0;
-    while soak.map_or(iteration < count, |time| start.elapsed() < time) {
-        run(mix(seed, iteration), seed, iteration);
-        iteration += 1;
+    for (kind, (count, message)) in &failures {
+        eprintln!("{count} failures of this kind: {kind}\n{message}\n");
     }
-    if soak.is_some() {
-        eprintln!("{name}: {iteration} cases, seed {seed:#x}");
-    }
+    assert!(failures.is_empty(), "{} kinds of failures", failures.len());
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

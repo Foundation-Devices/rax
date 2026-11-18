@@ -79,6 +79,11 @@ impl Ram {
         }
     }
 
+    pub fn word(&self, address: u32) -> u32 {
+        let offset = Ram::offset(address).unwrap();
+        u32::from_le_bytes(self.bytes[offset..offset + 4].try_into().unwrap())
+    }
+
     pub fn write_halfwords(&mut self, address: u32, halfwords: &[u16]) {
         for (index, halfword) in halfwords.iter().enumerate() {
             self.write(address + index as u32 * 2, &halfword.to_le_bytes());

@@ -17,9 +17,16 @@ const PAGE_SIZE: usize = 0x1000;
 mod blocks;
 mod corrections;
 mod engine;
+#[cfg(target_arch = "aarch64")]
+mod fp;
 mod machine;
+mod memory;
+mod mmu;
+mod neon;
+mod oracle;
 mod programs;
 mod suite;
+mod system;
 
 #[derive(Clone)]
 struct FlatMemory(Vec<u8>, ExclusiveMonitor);

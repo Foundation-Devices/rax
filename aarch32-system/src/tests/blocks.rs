@@ -1,9 +1,11 @@
 //! Random short programs, with the three engines of the test machine.
 
+use super::machine::Kind;
 use super::suite::{
-    CODE, Case, Insn, Program, Trio, cases, random_cpu, random_periods, t16, wide,
+    CODE, Case, Insn, Program, Trio, cases, ram_page, random_cpu, random_periods, t16, wide,
 };
 use super::{ARM_TEMPLATES, Random, WIDE_TEMPLATES};
+use crate::Block;
 
 const NOP: u32 = 0xbf00;
 
@@ -85,6 +87,64 @@ fn random_blocks_run_the_same_with_each_engine() {
         case.enter(&program);
         case.periods = random_periods(random);
         case.until = 1 + u64::from(random.below(24));
+        if random.below(8) == 0 {
+            // A program that goes across the page end gets a prefetch abort there.
+            case.ram.kinds[ram_page(CODE + 0x1000)] = Kind::Fault;
+        }
         trio.run(&case).map(|_| ())
     });
+}
+
+/// One instruction with random bits, then a branch back to it. The second run of the
+/// instruction is one of the fast interpreter and of the compiled code, also for the
+/// FP instructions, which the executor runs the first time.
+#[test]
+fn fast_operations_of_random_encodings_run_as_the_executor() {
+    let mut trio = Trio::new();
+    let mut fast = 0u64;
+    cases(
+        "fast_operations_of_random_encodings_run_as_the_executor",
+        0x51ed_270b_0f3a_9a12,
+        250_000,
+        |random| {
+            let kind = random.below(3);
+            let insn = match kind {
+                0 => {
+                    let raw = random.next() << 16 | random.next() & 0xffff;
+                    // Half of the A32 words have no condition.
+                    wide(if random.below(2) == 0 {
+                        raw & 0x0fff_ffff | 0xe000_0000
+                    } else {
+                        raw
+                    })
+                }
+                1 => wide((0xe800 + random.below(0x1800)) << 16 | random.next() & 0xffff),
+                _ => t16(random.below(0xe800)),
+            };
+            let thumb = kind != 0;
+            let back = match (thumb, insn.size) {
+                (false, _) => wide(0xeaff_fffd),
+                (true, 2) => t16(0xe7fd),
+                (true, _) => t16(0xe7fc),
+            };
+            let program = Program {
+                thumb,
+                at: CODE + 0x100,
+                insns: vec![insn, back],
+            };
+            // The executor alone runs the other encodings in each engine.
+            let block = Block::translate(&program.bytes(), 0x100, thumb);
+            if block.is_empty() || !block.has_fast_operation(0) {
+                return Ok(());
+            }
+            fast += 1;
+            let mut case = Case::new(random, thumb);
+            case.cpu = random_cpu(random);
+            case.load(&program);
+            case.enter(&program);
+            case.until = 3;
+            trio.run(&case).map(|_| ())
+        },
+    );
+    assert!(std::env::var_os("RAX_TEST_CASE").is_some() || fast > 50_000, "{fast}");
 }
