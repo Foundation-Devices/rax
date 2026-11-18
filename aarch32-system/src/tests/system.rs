@@ -7,7 +7,7 @@ use super::Random;
 use super::corrections::{arm_program, run, thumb_program, vectors_that_stop};
 use super::machine::Stop;
 use super::programs::VECTORS;
-use super::suite::{CODE, Case, FAULT_PAGE, Program, Trio, cases, random_cpu, t16, wide};
+use super::suite::{CODE, Case, DATA, FAULT_PAGE, Program, Trio, cases, random_cpu, t16, wide};
 
 /// ConditionPassed, from the flags in the bits 3:0 as N, Z, C, V.
 fn condition_passed(cond: u32, flags: u32) -> bool {
@@ -128,8 +128,8 @@ fn it_blocks_of_each_shape_with_each_value_of_the_flags() {
                 let program = thumb_program(insns);
                 let mut case = Case::new(&mut random, true);
                 case.cpu.regs[1..5].fill(0);
-                case.cpu.regs[5] = super::suite::DATA + 0x100;
-                case.ram.write_words(super::suite::DATA + 0x100, &[1]);
+                case.cpu.regs[5] = DATA + 0x100;
+                case.ram.write_words(DATA + 0x100, &[1]);
                 set_flags(&mut case, flags);
                 case.load(&program);
                 case.enter(&program);
@@ -554,5 +554,111 @@ fn status_registers_have_the_fields_of_the_architecture() {
         0x0a11_ce5e_ed00_000b,
         6_000,
         |random| status_registers(&mut trio, random),
+    );
+}
+
+/// The returns from an exception: MOVS and SUBS to the PC, LDM with the PC and the
+/// SPSR, and RFE. The CPSR is the saved one with its T and IT bits, and r13 and r14
+/// are those of its mode.
+fn exception_return(trio: &mut Trio, random: &mut Random, thumb: bool) -> Result<(), String> {
+    let handler = MODES[1 + random.below(5) as usize];
+    let target = MODES[random.below(7) as usize];
+    let target_thumb = random.below(2) == 0;
+    let mut banks = [[0; 2]; 6];
+    let mut high = [[0; 5]; 2];
+    banks.as_flattened_mut().fill_with(|| random.next());
+    high.as_flattened_mut().fill_with(|| random.next());
+    let stack = DATA + 0x400 + random.below(64) * 4;
+    banks[bank(handler)][0] = stack;
+    let address = CODE + 0x800 + random.below(64) * 4 + if target_thumb { 2 } else { 0 };
+    let offset = random.below(3) * 4;
+    banks[bank(handler)][1] = address + offset;
+    let mut case = Case::new(random, thumb);
+    case.cpu = random_cpu(random);
+    banked_cpu(&mut case, handler, &banks, &high);
+    // The saved CPSR: each flag and mask, and IT bits only for Thumb code.
+    let it_state = if target_thumb {
+        [0, 0x08, 0x1c, 0xa6][random.below(4) as usize]
+    } else {
+        0
+    };
+    let saved = Psr {
+        mode: target as u8,
+        t: target_thumb,
+        it_state,
+        e: false,
+        ..Psr::from_u32(random.next() & 0xf80f_01c0)
+    };
+    *case.cpu.get_current_spsr_mut().unwrap() = saved.clone();
+    // LDM and RFE take the PC, and RFE the CPSR, from the stack.
+    case.ram.write_words(stack, &[address, saved.to_u32()]);
+    let kind = random.below(if thumb { 2 } else { 4 });
+    let insn = match (kind, thumb) {
+        // SUBS pc, lr, #offset, and MOVS pc, lr for no offset.
+        (0, false) if offset == 0 => 0xe1b0_f00e,
+        (0, false) => 0xe25e_f000 | offset,
+        (0, true) => 0xf3de_8f00 | offset,
+        // RFEIA sp!.
+        (1, false) => 0xf8bd_0a00,
+        (1, true) => 0xe9bd_c000,
+        // LDMIA sp!, {pc}^ and LDMIB sp, {pc}^.
+        (2, false) => 0xe8fd_8000,
+        (_, _) => 0xe9dd_8000,
+    };
+    if kind == 3 {
+        case.ram.write_words(stack + 4, &[address]);
+    }
+    let program = Program {
+        thumb,
+        at: CODE + 0x100,
+        insns: vec![wide(insn)],
+    };
+    case.load(&program);
+    case.enter(&program);
+    case.until = 1;
+    let outcome = trio.run(&case)?;
+
+    let mut expected = banks;
+    // The stack pointer of the handler after RFE and LDM with a writeback.
+    if kind == 1 || kind == 2 {
+        expected[bank(handler)][0] = stack + if kind == 1 { 8 } else { 4 };
+    }
+    let registers = expected[bank(target)];
+    let high_now = high[usize::from(target == 0x11)];
+    let engines = (
+        outcome.cpsr,
+        outcome.regs[15],
+        [outcome.regs[13], outcome.regs[14]],
+    );
+    let manual = (saved.to_u32(), address, registers);
+    if engines == manual && outcome.regs[8..13] == high_now && outcome.stop.is_none() {
+        return Ok(());
+    }
+    Err(format!(
+        "{insn:08x} : thumb {thumb} from mode {handler:#x} to {target:#x}: cpsr, pc, r13 and r14\n  the engines: {engines:x?} {:?}\n  the manual:  {manual:x?}",
+        outcome.stop
+    ))
+}
+
+#[test]
+fn exception_returns_restore_the_state_of_the_architecture() {
+    let mut trio = Trio::new();
+    cases(
+        "exception_returns_restore_the_state_of_the_architecture",
+        0x0a11_ce5e_ed00_000d,
+        6_000,
+        |random| exception_return(&mut trio, random, false),
+    );
+}
+
+#[test]
+#[ignore = "the T32 decoder has no SUBS PC, LR and no RFE: an undefined instruction"]
+fn t32_exception_returns_restore_the_state_of_the_architecture() {
+    let mut trio = Trio::new();
+    cases(
+        "t32_exception_returns_restore_the_state_of_the_architecture",
+        0x0a11_ce5e_ed00_000e,
+        2_000,
+        |random| exception_return(&mut trio, random, true),
     );
 }
