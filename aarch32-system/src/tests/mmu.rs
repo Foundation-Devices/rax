@@ -63,7 +63,7 @@ fn image(random: &mut Random, slots: usize, user: bool) -> Vec<u32> {
             // A load to the PC: the next instruction at the other virtual address.
             6 | 7 => {
                 let table = pick(random, [ALIAS_TABLE, CODE_TABLE]);
-                words.push(0xe590_f000 | table << 16 | words.len() as u32 * 4);
+                words.push(0xe590_f000 | table << 16 | (words.len() as u32 * 4));
             }
             // MCR to TTBR0.
             8 | 9 => words.push(0xee02_0f10 | pick(random, SPACES) << 12),
@@ -109,7 +109,7 @@ fn translation_case(random: &mut Random) -> Case {
             .write_words(first + (RAM_BASE >> 20) * 4, &[second | 1]);
         for page in 0..32 {
             case.ram
-                .write_words(second + page * 4, &[RAM_BASE + page * PAGE | SMALL_PAGE]);
+                .write_words(second + page * 4, &[(RAM_BASE + page * PAGE) | SMALL_PAGE]);
         }
         let code = [CODE, OTHER_CODE][space];
         case.ram
@@ -119,7 +119,7 @@ fn translation_case(random: &mut Random) -> Case {
         let guard = if space == 0 { READ_ONLY } else { 0 };
         case.ram.write_words(
             second + (GUARDED - RAM_BASE) / PAGE * 4,
-            &[DATA + PAGE | SMALL_PAGE | guard],
+            &[(DATA + PAGE) | SMALL_PAGE | guard],
         );
     }
     let cpu = &mut case.cpu;

@@ -217,7 +217,7 @@ fn alu_shifted_register(random: &mut Random) -> Instruction {
         [0, 1, 31, random.below(32)][random.below(4) as usize],
     );
     let arm = (opcode < 16)
-        .then(|| opcode << 21 | s << 20 | rn << 16 | rd << 12 | imm5 << 7 | kind << 5 | rm);
+        .then_some(opcode << 21 | s << 20 | rn << 16 | rd << 12 | imm5 << 7 | kind << 5 | rm);
     let thumb = thumb_data_processing(opcode, rd, rn).map(|(thumb, td, tn)| {
         0xea00_0000
             | thumb << 21
@@ -932,7 +932,9 @@ fn bits_and_bytes(random: &mut Random) -> Instruction {
     }
 }
 
-const CLASSES: [(&str, fn(&mut Random) -> Instruction); 8] = [
+type Generate = fn(&mut Random) -> Instruction;
+
+const CLASSES: [(&str, Generate); 8] = [
     ("alu_immediate", alu_immediate),
     ("alu_shifted_register", alu_shifted_register),
     ("alu_register_shift", alu_register_shift),

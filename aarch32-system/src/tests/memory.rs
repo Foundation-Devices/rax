@@ -77,6 +77,7 @@ fn extend(value: u32, size: u32, signed: bool) -> u32 {
 }
 
 /// One register at `Rn + offset`, with the index mode of P and W.
+#[allow(clippy::too_many_arguments)]
 fn single(model: &mut Model, load: bool, kind: u32, rt: u32, rn: u32, offset: u32, p: u32, w: u32) {
     let (size, signed) = width(kind);
     let base = model.r[rn as usize];
@@ -162,7 +163,7 @@ fn single_register(random: &mut Random) -> Instruction {
                 | 0x800
                 | p << 10
                 | u << 9
-                | (1 - p | w) << 8
+                | ((1 - p) | w) << 8
                 | imm;
             let thumb = (!(p == 1 && w == 0 && u == 1)).then_some(wide(thumb));
             Instruction {
@@ -309,12 +310,12 @@ fn pair(random: &mut Random) -> Instruction {
         let raw = 0xe840_0000
             | p << 24
             | u << 23
-            | (1 - p | w) << 21
+            | ((1 - p) | w) << 21
             | load << 20
             | rn << 16
             | rt << 12
             | rt2 << 8
-            | imm / 4;
+            | (imm / 4);
         return Instruction {
             arm: None,
             thumb: Some(wide(raw)),
@@ -598,7 +599,7 @@ fn with_pc(random: &mut Random) -> Instruction {
             let rt = rt % 8;
             Instruction {
                 arm: None,
-                thumb: Some(t16(0x4800 | rt << 8 | imm / 4)),
+                thumb: Some(t16(0x4800 | rt << 8 | (imm / 4))),
                 base: rn,
                 index: None,
                 aligned: false,
@@ -639,7 +640,9 @@ fn with_pc(random: &mut Random) -> Instruction {
     }
 }
 
-const CLASSES: [(&str, fn(&mut Random) -> Instruction); 5] = [
+type Generate = fn(&mut Random) -> Instruction;
+
+const CLASSES: [(&str, Generate); 5] = [
     ("single_register", single_register),
     ("pair", pair),
     ("multiple", multiple),

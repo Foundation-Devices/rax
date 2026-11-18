@@ -45,34 +45,34 @@ enum Kind {
 /// The operation, its opcode field with the bit 4 below it, the U bit when it is a
 /// part of the opcode, and the largest size field.
 const KINDS: [(Kind, u32, Option<u32>, u32); 28] = [
-    (Kind::Hadd, 0b0000_0, None, 2),
-    (Kind::Qadd, 0b0000_1, None, 3),
-    (Kind::Rhadd, 0b0001_0, None, 2),
-    (Kind::Logic, 0b0001_1, None, 3),
-    (Kind::Hsub, 0b0010_0, None, 2),
-    (Kind::Qsub, 0b0010_1, None, 3),
-    (Kind::Cgt, 0b0011_0, None, 2),
-    (Kind::Cge, 0b0011_1, None, 2),
-    (Kind::Shl, 0b0100_0, None, 3),
-    (Kind::Qshl, 0b0100_1, None, 3),
-    (Kind::Rshl, 0b0101_0, None, 3),
-    (Kind::Qrshl, 0b0101_1, None, 3),
-    (Kind::Max, 0b0110_0, None, 2),
-    (Kind::Min, 0b0110_1, None, 2),
-    (Kind::Abd, 0b0111_0, None, 2),
-    (Kind::Aba, 0b0111_1, None, 2),
-    (Kind::Add, 0b1000_0, Some(0), 3),
-    (Kind::Sub, 0b1000_0, Some(1), 3),
-    (Kind::Tst, 0b1000_1, Some(0), 2),
-    (Kind::Ceq, 0b1000_1, Some(1), 2),
-    (Kind::Mla, 0b1001_0, Some(0), 2),
-    (Kind::Mls, 0b1001_0, Some(1), 2),
-    (Kind::Mul, 0b1001_1, Some(0), 2),
-    (Kind::Pmax, 0b1010_0, None, 2),
-    (Kind::Pmin, 0b1010_1, None, 2),
-    (Kind::Padd, 0b1011_1, Some(0), 2),
-    (Kind::Qdmulh, 0b1011_0, Some(0), 2),
-    (Kind::Qrdmulh, 0b1011_0, Some(1), 2),
+    (Kind::Hadd, 0b00000, None, 2),
+    (Kind::Qadd, 0b00001, None, 3),
+    (Kind::Rhadd, 0b00010, None, 2),
+    (Kind::Logic, 0b00011, None, 3),
+    (Kind::Hsub, 0b00100, None, 2),
+    (Kind::Qsub, 0b00101, None, 3),
+    (Kind::Cgt, 0b00110, None, 2),
+    (Kind::Cge, 0b00111, None, 2),
+    (Kind::Shl, 0b01000, None, 3),
+    (Kind::Qshl, 0b01001, None, 3),
+    (Kind::Rshl, 0b01010, None, 3),
+    (Kind::Qrshl, 0b01011, None, 3),
+    (Kind::Max, 0b01100, None, 2),
+    (Kind::Min, 0b01101, None, 2),
+    (Kind::Abd, 0b01110, None, 2),
+    (Kind::Aba, 0b01111, None, 2),
+    (Kind::Add, 0b10000, Some(0), 3),
+    (Kind::Sub, 0b10000, Some(1), 3),
+    (Kind::Tst, 0b10001, Some(0), 2),
+    (Kind::Ceq, 0b10001, Some(1), 2),
+    (Kind::Mla, 0b10010, Some(0), 2),
+    (Kind::Mls, 0b10010, Some(1), 2),
+    (Kind::Mul, 0b10011, Some(0), 2),
+    (Kind::Pmax, 0b10100, None, 2),
+    (Kind::Pmin, 0b10101, None, 2),
+    (Kind::Padd, 0b10111, Some(0), 2),
+    (Kind::Qdmulh, 0b10110, Some(0), 2),
+    (Kind::Qrdmulh, 0b10110, Some(1), 2),
 ];
 
 /// The value in `bits` bits, and true when it was out of the range.
@@ -791,7 +791,7 @@ fn two_registers(random: &mut Random) -> Instruction {
                         _ => (0..half)
                             .map(|index| {
                                 let zipped = |place: usize| {
-                                    if place % 2 == 0 {
+                                    if place.is_multiple_of(2) {
                                         first[place / 2]
                                     } else {
                                         other[place / 2]
@@ -876,7 +876,7 @@ fn check(trio: &mut Trio, random: &mut Random) -> Result<(), String> {
                     0x8000_0000,
                 ];
                 (0..8).fold(0, |value, _| {
-                    value << 8 << random.below(4) * 8 | limits[random.below(10) as usize]
+                    value << 8 << (random.below(4) * 8) | limits[random.below(10) as usize]
                 })
             }
             1 => (0..8).fold(0, |value, _| {

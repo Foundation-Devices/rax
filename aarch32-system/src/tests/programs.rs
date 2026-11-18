@@ -543,7 +543,7 @@ fn memory(b: &mut Builder, random: &mut Random, cond: u32) {
         }
         7 | 8 => {
             // PUSH and POP of results. A32 PUSH with one register is not a multiple.
-            let mask = 1 + random.below(15) | random.below(2) << 12;
+            let mask = (1 + random.below(15)) | (random.below(2) << 12);
             let mask = if mask.count_ones() < 2 {
                 mask | 0x1001
             } else {
@@ -561,7 +561,7 @@ fn memory(b: &mut Builder, random: &mut Random, cond: u32) {
         }
         9 | 10 => {
             // LDMIA and STMIA with the pointer that moves, and with the one that stays.
-            let mask = 1 + random.below(15) | random.below(2) << 12 | 1;
+            let mask = (1 + random.below(15)) | (random.below(2) << 12) | 1;
             let mask = if mask.count_ones() < 2 {
                 mask | 0x1000
             } else {

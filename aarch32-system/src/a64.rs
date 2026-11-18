@@ -1730,7 +1730,7 @@ mod tests {
             let (ones, rotation) = ((imms & (size - 1)) + 1, immr & (size - 1));
             let run = u32::MAX >> (32 - ones);
             let mask = u32::MAX >> (32 - size);
-            let element = (run >> rotation | run << (size - rotation) % size) & mask;
+            let element = (run >> rotation | run << ((size - rotation) % size)) & mask;
             (0..32 / size).fold(0, |value, index| value | element << (index * size))
         };
         let mut encoded = 0;
@@ -1739,7 +1739,7 @@ mod tests {
                 for rotation in 0..size {
                     let run = u32::MAX >> (32 - ones);
                     let mask = u32::MAX >> (32 - size);
-                    let element = (run >> rotation | run << (size - rotation) % size) & mask;
+                    let element = (run >> rotation | run << ((size - rotation) % size)) & mask;
                     let value =
                         (0..32 / size).fold(0, |value, index| value | element << (index * size));
                     let fields = logical_imm(value).unwrap_or_else(|| panic!("{value:#x}"));

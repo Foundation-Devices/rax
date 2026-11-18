@@ -249,7 +249,7 @@ fn programs_run_the_same_when_the_code_buffer_gets_full() {
     // removes the code of the page, and the next run compiles the block again.
     let mut filler = Case::new(&mut super::Random(3), false);
     let insns = (0..64)
-        .map(|index| wide(0xe584_0000 | (index & 1) << 20 | index << 12 & 0x3000 | index * 4))
+        .map(|index| wide(0xe584_0000 | (index & 1) << 20 | index << 12 & 0x3000 | (index * 4)))
         .collect();
     let program = Program {
         thumb: false,
