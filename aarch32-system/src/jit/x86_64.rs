@@ -1,6 +1,6 @@
 //! The code generator for an x86-64 host with the System V calling convention.
 //!
-//! Ten guest registers are in host registers (`HOST`) and the others are in the CPU state.
+//! Nine guest registers are in host registers (`HOST`) and the others are in the CPU state.
 //! The guest flags are in RAX: N, Z and C in the bits 7, 6 and 0 of AH, where LAHF and
 //! SAHF have SF, ZF and CF, and V in AL. The flags of the host are a copy of a part of
 //! them only from the instruction that made them to the next instruction that changes
@@ -41,8 +41,11 @@ const T1: Reg = RDX;
 /// CL has the amount of a shift by a register.
 const T2: Reg = RCX;
 const STATE: Reg = RBP;
-/// The host register of each guest register that has one: r0 to r6, r8, r11 and the SP
-/// are in 85 % of the register operands of the compiled blocks of a KeyOS boot.
+/// The instructions that can run. A register, or else each change of the count in a
+/// block waits for the store of the change before it.
+const BUDGET: Reg = R14;
+/// The host register of each guest register that has one: r0 to r6, r8 and the SP are the
+/// registers of the most operands of the compiled blocks of a KeyOS boot.
 const HOST: [Option<Reg>; 15] = [
     Some(RSI),
     Some(RDI),
@@ -55,7 +58,7 @@ const HOST: [Option<Reg>; 15] = [
     Some(R13),
     None,
     None,
-    Some(R14),
+    None,
     None,
     Some(R15),
     None,
@@ -68,18 +71,17 @@ const CONTEXT: usize = 0;
 const READS: usize = 8;
 const WRITES: usize = 16;
 const JUMPS: usize = 24;
-const BUDGET: usize = 32;
 /// The guest flags during a call.
-const SAVED_FLAGS: usize = 40;
+const SAVED_FLAGS: usize = 32;
 /// 32 bits that are not 0 when FP arithmetic ran since the entry: the MXCSR has its
 /// exceptions.
-const FP_USED: usize = 48;
+const FP_USED: usize = 40;
 /// 32 bits for a read or a write of the MXCSR.
-const MXCSR: usize = 52;
+const MXCSR: usize = 44;
 /// 32 bits for the MXCSR before an instruction with FP arithmetic.
-const MXCSR_BEFORE: usize = 56;
+const MXCSR_BEFORE: usize = 48;
 /// With the return address and the six saved registers, a multiple of 16.
-const FRAME: u32 = 72;
+const FRAME: u32 = 56;
 
 /// Round to nearest, no flush to zero, no trap, no exception.
 pub(super) const MXCSR_DEFAULT: u32 = 0x1f80;
@@ -768,7 +770,7 @@ impl Compiler<'_> {
     fn give_back(&mut self, instructions: usize) {
         if instructions != 0 {
             self.asm
-                .alu_imm(x64::Alu::Add, Quad, mem(RSP, BUDGET), instructions as u32);
+                .alu_imm(x64::Alu::Add, Quad, Rm::Reg(BUDGET), instructions as u32);
         }
     }
 
@@ -2256,7 +2258,7 @@ impl Compiler<'_> {
         let live = live_flags(steps, |index| self.always_has_code(index));
         let over_budget = self.asm.label();
         self.asm
-            .alu_imm(x64::Alu::Sub, Quad, mem(RSP, BUDGET), steps.len() as u32);
+            .alu_imm(x64::Alu::Sub, Quad, Rm::Reg(BUDGET), steps.len() as u32);
         self.asm.jcc(x64::S, over_budget);
         if (0..steps.len()).any(|index| has_fp_code(steps[index].op) && self.fp_admitted(index)) {
             // The FP code is for one state of the FP controls.
@@ -2441,11 +2443,11 @@ pub(super) fn stubs(base: usize) -> (Vec<u8>, Stubs) {
         (offset_of!(Context, reads), READS),
         (offset_of!(Context, writes), WRITES),
         (offset_of!(Context, jumps), JUMPS),
-        (offset_of!(Context, budget), BUDGET),
     ] {
         a.mov(Quad, RAX, mem(RDI, field));
         a.mov_to(Quad, mem(RSP, slot), RAX);
     }
+    a.mov(Quad, BUDGET, mem(RDI, offset_of!(Context, budget)));
     a.mov_imm_to(Long, mem(RSP, FP_USED), 0);
     a.mov(Quad, STATE, mem(RDI, offset_of!(Context, cpu)));
     a.mov(Quad, T1, Rm::Reg(RSI));
@@ -2490,8 +2492,7 @@ pub(super) fn stubs(base: usize) -> (Vec<u8>, Stubs) {
         a.alu_imm(x64::Alu::And, Long, Rm::Reg(T1), 1);
         a.mov_to(Byte, mem(STATE, CPSR + field), T1);
     }
-    a.mov(Quad, T1, mem(RSP, BUDGET));
-    a.mov_to(Quad, mem(T2, offset_of!(Context, budget)), T1);
+    a.mov_to(Quad, mem(T2, offset_of!(Context, budget)), BUDGET);
     mxcsr_to_fpscr(&mut a, 0, T1);
     a.alu_imm(x64::Alu::Add, Quad, Rm::Reg(RSP), FRAME);
     for register in SAVED.into_iter().rev() {
@@ -2508,8 +2509,7 @@ pub(super) fn stubs(base: usize) -> (Vec<u8>, Stubs) {
         }
         a.mov_to(Quad, frame(SAVED_FLAGS), FLAGS);
         a.mov(Quad, RDI, frame(CONTEXT));
-        a.mov(Quad, RAX, frame(BUDGET));
-        a.mov_to(Quad, mem(RDI, offset_of!(Context, budget)), RAX);
+        a.mov_to(Quad, mem(RDI, offset_of!(Context, budget)), BUDGET);
         mxcsr_to_fpscr(&mut a, 8, RAX);
         a.mov(Long, RSI, Rm::Reg(T0));
         // T1 and T2 are the registers of the third and the fourth argument.
@@ -2537,8 +2537,7 @@ pub(super) fn stubs(base: usize) -> (Vec<u8>, Stubs) {
             a.mov(Long, host, state);
         }
         a.mov(Quad, T2, frame(CONTEXT));
-        a.mov(Quad, T2, mem(T2, offset_of!(Context, budget)));
-        a.mov_to(Quad, frame(BUDGET), T2);
+        a.mov(Quad, BUDGET, mem(T2, offset_of!(Context, budget)));
         a.mov(Quad, FLAGS, frame(SAVED_FLAGS));
         a.ret();
         start

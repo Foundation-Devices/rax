@@ -59,7 +59,7 @@ its `machine.rs` and `bus.rs` show the calls in order.
 ## How the compiled code keeps the state exact
 
 On AArch64, guest r0 to r14 are host x0 to x14 and the guest flags are the host flags. On
-x86-64, r0 to r6, r8, r11 and the SP are in host registers and the other registers are in
+x86-64, r0 to r6, r8 and the SP are in host registers and the other registers are in
 the CPU state; the guest flags are in RAX in the form of LAHF and SETO (N, Z and C in AH,
 with C and not the borrow of x86; V in AL). The flags of the host are a copy of them only
 from the instruction that made them to the next instruction that changes the flags of the
