@@ -4506,7 +4506,7 @@ fn neon_saturating_doubling_long_multiply_sets_qc_on_saturation() {
         ExecResult::Continue
     ));
     assert_eq!(cpu.vfp.read_d_bits(8), 0xffff_fffb_0000_000d);
-    assert_eq!(cpu.vfp.read_d_bits(9), 0x0000_0000_7fff_ffff);
+    assert_eq!(cpu.vfp.read_d_bits(9), 0xffff_ffff_7fff_ffff);
     assert!(cpu.vfp.fpscr.qc());
 
     cpu.vfp.fpscr.set_qc(false);
@@ -4519,7 +4519,7 @@ fn neon_saturating_doubling_long_multiply_sets_qc_on_saturation() {
         ExecResult::Continue
     ));
     assert_eq!(cpu.vfp.read_d_bits(16), 0x0000_0004_0000_0058);
-    assert_eq!(cpu.vfp.read_d_bits(17), 0xffff_ffff_8000_0000);
+    assert_eq!(cpu.vfp.read_d_bits(17), 0x0000_0000_8000_0000);
     assert!(cpu.vfp.fpscr.qc());
 
     cpu.vfp.fpscr.set_qc(false);
