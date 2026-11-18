@@ -1663,10 +1663,10 @@ fn bytes(words: &[u32]) -> Vec<u8> {
     words.iter().flat_map(|word| word.to_le_bytes()).collect()
 }
 
-/// Returns the code of the block and its branches to addresses of the page with no code
-/// (the address and the offset of the branch), or None when the first instruction has no
-/// compiled form.
-pub(super) fn compile(unit: Unit) -> Option<(Vec<u8>, Links)> {
+/// Returns the code of the block, no cold code, and its branches to addresses of the page
+/// with no code (the address and the offset of the branch), or None when the first
+/// instruction has no compiled form.
+pub(super) fn compile(unit: Unit) -> Option<(Vec<u8>, Vec<u8>, Links)> {
     let mut asm = Asm::new(unit.entry);
     let compiler = Compiler {
         entries: unit.entries,
@@ -1684,7 +1684,7 @@ pub(super) fn compile(unit: Unit) -> Option<(Vec<u8>, Links)> {
     };
     let (words, links) = compiler.compile()?;
     let links = links.into_iter().map(|(key, word)| (key, word * 4));
-    Some((bytes(&words), links.collect()))
+    Some((bytes(&words), Vec::new(), links.collect()))
 }
 
 /// The address and the bytes of a branch to `target` at `site`.

@@ -251,6 +251,10 @@ struct Compiler<'a> {
     /// The branches to guest addresses in the page with no code: the address and the
     /// offset of the branch.
     links: Links,
+    /// Where each of these branches goes until its address has code, and the address.
+    lookups: Vec<(Label, u32)>,
+    /// The address of the end of the cold code.
+    cold_end: usize,
     /// A branch to `leave_to_address`.
     no_jump: Label,
     /// The guest flags that the flags of the host have now, when `asm.flags_changed`
@@ -827,11 +831,10 @@ impl Compiler<'_> {
                 self.asm.jmp_to(entry);
                 return;
             }
-            // A branch to the next instruction, until the address has code.
+            let lookup = self.asm.label();
             self.links.push((key, self.asm.bytes.len()));
-            self.asm.emit(&[0xe9, 0, 0, 0, 0]);
-            self.asm.mov_imm(T0, key);
-            self.lookup();
+            self.asm.jmp(lookup);
+            self.lookups.push((lookup, key));
             return;
         }
         self.asm.mov_imm(T0, key);
@@ -2316,9 +2319,9 @@ impl Compiler<'_> {
         op != Op::Slow && !op.is_fp()
     }
 
-    /// Returns the code and its branches to addresses of the page with no code, or None
-    /// when the first instruction has no compiled form.
-    fn compile(mut self) -> Option<(Vec<u8>, Links)> {
+    /// Returns the code in sequence, the cold code and the branches to addresses of the
+    /// page with no code, or None when the first instruction has no compiled form.
+    fn compile(mut self) -> Option<(Vec<u8>, Vec<u8>, Links)> {
         let block = self.block;
         let steps = &block.steps;
         let live = live_flags(steps, |index| self.always_has_code(index));
@@ -2400,6 +2403,7 @@ impl Compiler<'_> {
                 self.page.wrapping_add(block.end_offset.into()) | thumb,
             );
         }
+        self.asm.start_cold();
         self.asm.bind(over_budget);
         self.give_back(steps.len());
         self.asm
@@ -2421,8 +2425,13 @@ impl Compiler<'_> {
                 self.asm.emit_u32(index as u32);
             }
         }
-        self.asm.finish();
-        Some((self.asm.bytes, self.links))
+        for (lookup, key) in std::mem::take(&mut self.lookups) {
+            self.asm.bind(lookup);
+            self.asm.mov_imm(T0, key);
+            self.lookup();
+        }
+        self.asm.finish(self.cold_end - self.asm.bytes.len());
+        Some((self.asm.bytes, self.asm.cold, self.links))
     }
 }
 
@@ -2435,10 +2444,10 @@ fn size_of(width: Width) -> u32 {
     }
 }
 
-/// Returns the code of the block and its branches to addresses of the page with no code
-/// (the address and the offset of the branch), or None when the first instruction has no
-/// compiled form.
-pub(super) fn compile(unit: Unit) -> Option<(Vec<u8>, Links)> {
+/// Returns the code of the block, the code that ends at `unit.cold_end`, and the branches
+/// to addresses of the page with no code (the address and the offset of the branch), or
+/// None when the first instruction has no compiled form.
+pub(super) fn compile(unit: Unit) -> Option<(Vec<u8>, Vec<u8>, Links)> {
     let mut asm = Asm::new(unit.entry);
     let compiler = Compiler {
         no_jump: asm.label(),
@@ -2454,6 +2463,8 @@ pub(super) fn compile(unit: Unit) -> Option<(Vec<u8>, Links)> {
         zeros: Vec::new(),
         entries: unit.entries,
         links: Vec::new(),
+        lookups: Vec::new(),
+        cold_end: unit.cold_end,
         host_flags: 0,
         borrow: false,
         flag_changes: 0,
@@ -2606,7 +2617,7 @@ pub(super) fn stubs(base: usize) -> (Vec<u8>, Stubs) {
         start
     };
     let (call_load, call_store) = (call(false), call(true));
-    a.finish();
+    a.finish(0);
     (
         a.bytes,
         Stubs {

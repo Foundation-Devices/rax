@@ -168,6 +168,8 @@ struct Stubs {
 pub struct Jit {
     memory: *mut u8,
     used: usize,
+    /// The bytes of the cold code, which is at the end of the memory.
+    cold_used: usize,
     stubs_end: usize,
     stubs: Stubs,
     /// The blocks with code and the virtual page of the code, by the number that the
@@ -406,6 +408,9 @@ type Links = Vec<(u32, usize)>;
 struct Unit<'a> {
     /// The address of the code.
     entry: usize,
+    /// The address of the end of the cold code of the block, for a generator that has
+    /// such code.
+    cold_end: usize,
     block: &'a Block,
     /// The virtual address of the page of the block, and its bytes.
     page: u32,
@@ -496,6 +501,7 @@ impl Jit {
         let mut jit = Jit {
             memory,
             used: 0,
+            cold_used: 0,
             stubs_end: 0,
             stubs,
             blocks: Vec::new(),
@@ -504,23 +510,32 @@ impl Jit {
             pages: HashMap::new(),
             stats: Stats::default(),
         };
-        jit.write(&code);
+        jit.write(&code, &[]);
         jit.stubs_end = jit.used;
         Some(jit)
     }
 
-    /// Puts code at the next free place.
-    fn write(&mut self, code: &[u8]) {
-        assert!(self.used + code.len() <= CODE_SIZE);
-        // SAFETY: the range is in the mapping and no code of it runs now.
-        unsafe { write_code(self.memory.add(self.used), code) };
+    /// Puts code at the next free place, and cold code before the cold code that is
+    /// there.
+    fn write(&mut self, code: &[u8], cold: &[u8]) {
+        assert!(self.used + code.len() + self.cold_used + cold.len() <= CODE_SIZE);
+        // SAFETY: the ranges are in the mapping and no code of them runs now.
+        unsafe {
+            write_code(self.memory.add(self.used), code);
+            if !cold.is_empty() {
+                let start = CODE_SIZE - self.cold_used - cold.len();
+                write_code(self.memory.add(start), cold);
+            }
+        }
         self.used += code.len();
-        self.stats.code_bytes = self.used;
+        self.cold_used += cold.len();
+        self.stats.code_bytes = self.used + self.cold_used;
     }
 
     /// Removes all the code and the blocks of the code. No code runs now.
     pub fn flush(&mut self) {
         self.used = self.stubs_end;
+        self.cold_used = 0;
         self.blocks.clear();
         self.pages.clear();
         self.generation += 1;
@@ -568,7 +583,7 @@ impl Jit {
             }
             _ => {}
         }
-        if self.used + block.len() * host::INSTRUCTION_CODE > CODE_SIZE {
+        if self.used + self.cold_used + block.len() * host::INSTRUCTION_CODE > CODE_SIZE {
             self.flush();
         }
         let entry = self.memory as usize + self.used;
@@ -576,6 +591,7 @@ impl Jit {
         let page_code = self.pages.entry(physical).or_default();
         let unit = Unit {
             entry,
+            cold_end: self.memory as usize + CODE_SIZE - self.cold_used,
             block,
             page,
             code: &bytes,
@@ -584,13 +600,13 @@ impl Jit {
             number: self.blocks.len() as u32,
             entries: &page_code.entries,
         };
-        let Some((code, links)) = host::compile(unit) else {
+        let Some((code, cold, links)) = host::compile(unit) else {
             block.tier.set(Tier::Declined {
                 generation: self.generation,
             });
             return None;
         };
-        self.write(&code);
+        self.write(&code, &cold);
         // The branches of older code to this address, and the ones of this code.
         let key = page.wrapping_add(block.offset(0)) | u32::from(block.thumb);
         let page_code = self.pages.get_mut(&physical).unwrap();

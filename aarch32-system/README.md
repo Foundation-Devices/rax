@@ -77,6 +77,12 @@ SIMD operations on elements, x86-64 has code (SSE2) only for VADD, VSUB, VCEQ, V
 with 0, VSHR, VMUL, VMLA and VMLS of 16-bit elements, and the compares of FP numbers; the interpreter runs the others and VLD3/VLD4/VST3/VST4. The start of a block subtracts its length from the budget, and
 each exit in the block adds back the instructions that did not run.
 
+On x86-64 the code of a block has two parts. The code in sequence is at the next free
+place of the code memory. The cold code (the calls for an access with no direct entry, the
+exits, the look in the jump table of a branch to an address with no code yet) goes down
+from the end of the memory: with it between the blocks, the blocks of 95 % of the
+instructions of a KeyOS boot are on 1650 pages of 4 KiB, and on 1240 without it.
+
 ## Tests
 
 All the commands are for the directory of rax. The tests are in `src/tests.rs`,

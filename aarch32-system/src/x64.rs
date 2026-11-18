@@ -132,13 +132,28 @@ pub const G: u8 = 15;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Label(usize);
 
+/// The place that a branch goes to.
+#[derive(Clone, Copy)]
+enum Target {
+    Label(usize),
+    Address(usize),
+}
+
+/// The code has two parts with their own addresses: the code in sequence, then the cold
+/// code, which runs seldom and is far, or else it takes the place of code in the caches
+/// of the host. A branch can go from each part to the other.
 pub struct Asm {
-    /// The address of the first byte.
+    /// The address of the first byte of the code in sequence.
     base: usize,
+    /// The part that the instructions go to now. After `finish`, the code in sequence.
     pub bytes: Vec<u8>,
-    labels: Vec<Option<usize>>,
-    /// The branches to labels: the offset of the 32-bit field and the label.
-    fixups: Vec<(usize, usize)>,
+    /// The other part. After `finish`, the cold code.
+    pub cold: Vec<u8>,
+    in_cold: bool,
+    /// The part (true for the cold code) and the offset of each label with a place.
+    labels: Vec<Option<(bool, usize)>>,
+    /// The branches: the part and the offset of the 32-bit field, and the target.
+    fixups: Vec<(bool, usize, Target)>,
     /// Set by each instruction that can change the flags of the host, and by `bind`:
     /// a branch can come there with other flags.
     pub flags_changed: bool,
@@ -149,6 +164,8 @@ impl Asm {
         Asm {
             base,
             bytes: Vec::new(),
+            cold: Vec::new(),
+            in_cold: false,
             labels: Vec::new(),
             fixups: Vec::new(),
             flags_changed: true,
@@ -159,9 +176,18 @@ impl Asm {
         self.base
     }
 
-    /// The address of the next byte.
+    /// The address of the next byte of the code in sequence.
     pub fn here(&self) -> usize {
+        assert!(!self.in_cold);
         self.base + self.bytes.len()
+    }
+
+    /// The instructions from here go to the cold code.
+    pub fn start_cold(&mut self) {
+        assert!(!self.in_cold);
+        std::mem::swap(&mut self.bytes, &mut self.cold);
+        self.in_cold = true;
+        self.flags_changed = true;
     }
 
     pub fn emit(&mut self, bytes: &[u8]) {
@@ -178,15 +204,34 @@ impl Asm {
     }
 
     pub fn bind(&mut self, label: Label) {
-        self.labels[label.0] = Some(self.bytes.len());
+        self.labels[label.0] = Some((self.in_cold, self.bytes.len()));
         self.flags_changed = true;
     }
 
-    /// Writes the offsets of the branches to labels. Each label must have a place.
-    pub fn finish(&mut self) {
-        for &(at, label) in &self.fixups {
-            let offset = self.labels[label].unwrap() as i64 - (at as i64 + 4);
-            self.bytes[at..at + 4].copy_from_slice(&(offset as i32).to_le_bytes());
+    /// Writes the offsets of the branches, for cold code at the address `cold_base`.
+    /// Each label must have a place.
+    pub fn finish(&mut self, cold_base: usize) {
+        if self.in_cold {
+            std::mem::swap(&mut self.bytes, &mut self.cold);
+            self.in_cold = false;
+        }
+        let address =
+            |cold: bool, offset: usize| (if cold { cold_base } else { self.base }) + offset;
+        for &(cold, at, target) in &self.fixups {
+            let target = match target {
+                Target::Label(label) => {
+                    let (cold, offset) = self.labels[label].unwrap();
+                    address(cold, offset)
+                }
+                Target::Address(target) => target,
+            };
+            let offset = i32::try_from(target as i64 - (address(cold, at) as i64 + 4)).unwrap();
+            let part = if cold {
+                &mut self.cold
+            } else {
+                &mut self.bytes
+            };
+            part[at..at + 4].copy_from_slice(&offset.to_le_bytes());
         }
         self.fixups.clear();
     }
@@ -575,34 +620,27 @@ impl Asm {
         self.bytes.push(0xc3);
     }
 
-    fn branch_to(&mut self, opcode: &[u8], label: Label) {
+    fn branch_to(&mut self, opcode: &[u8], target: Target) {
         self.emit(opcode);
-        self.fixups.push((self.bytes.len(), label.0));
+        self.fixups.push((self.in_cold, self.bytes.len(), target));
         self.emit_u32(0);
     }
 
-    fn branch_to_address(&mut self, opcode: u8, address: usize) {
-        let offset = address as i64 - (self.here() as i64 + 5);
-        assert!(i32::try_from(offset).is_ok());
-        self.bytes.push(opcode);
-        self.emit_u32(offset as u32);
-    }
-
     pub fn jmp(&mut self, label: Label) {
-        self.branch_to(&[0xe9], label);
+        self.branch_to(&[0xe9], Target::Label(label.0));
     }
 
     pub fn jcc(&mut self, cond: u8, label: Label) {
-        self.branch_to(&[0x0f, 0x80 | cond], label);
+        self.branch_to(&[0x0f, 0x80 | cond], Target::Label(label.0));
     }
 
     pub fn jmp_to(&mut self, address: usize) {
-        self.branch_to_address(0xe9, address);
+        self.branch_to(&[0xe9], Target::Address(address));
     }
 
     pub fn call_to(&mut self, address: usize) {
         self.flags_changed = true;
-        self.branch_to_address(0xe8, address);
+        self.branch_to(&[0xe8], Target::Address(address));
     }
 
     pub fn jmp_rm(&mut self, target: Rm) {
@@ -622,7 +660,7 @@ mod tests {
     fn bytes(emit: impl FnOnce(&mut Asm)) -> Vec<u8> {
         let mut asm = Asm::new(0x1000);
         emit(&mut asm);
-        asm.finish();
+        asm.finish(0);
         asm.bytes
     }
 
@@ -848,5 +886,24 @@ mod tests {
         for (text, expected, bytes) in table {
             assert_eq!(bytes, expected, "{text}");
         }
+    }
+
+    #[test]
+    fn branches_go_between_the_code_in_sequence_and_the_cold_code() {
+        let mut asm = Asm::new(0x1000);
+        let (cold, back) = (asm.label(), asm.label());
+        asm.jcc(NE, cold);
+        asm.bind(back);
+        asm.ret();
+        asm.start_cold();
+        asm.bind(cold);
+        asm.call_to(0x1800);
+        asm.jmp(back);
+        asm.finish(0x5000);
+        // jne 0x5000; ret
+        assert_eq!(asm.bytes, [0x0f, 0x85, 0xfa, 0x3f, 0x00, 0x00, 0xc3]);
+        // call 0x1800; jmp 0x1006
+        let expected = [0xe8, 0xfb, 0xc7, 0xff, 0xff, 0xe9, 0xfc, 0xbf, 0xff, 0xff];
+        assert_eq!(asm.cold, expected);
     }
 }
