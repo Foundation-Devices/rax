@@ -24,6 +24,8 @@ const FS_EXTERNAL_ABORT: u32 = 0b01000;
 const FS_ALIGNMENT: u32 = 0b00001;
 const DFSR_WNR: u32 = 1 << 11;
 const USER_MODE: u8 = 0x10;
+/// T32 `subs pc, lr, #imm8` with no immediate value.
+const T32_SUBS_PC_LR: u32 = 0xf3de_8f00;
 
 /// How the accesses go to a physical page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -976,11 +978,14 @@ impl Machine {
                 }
             }
             ExecResult::Branch(target) => {
-                if insn.mnemonic != Mnemonic::RFE && target & 1 != 0 {
+                // These returns from an exception take T and the IT state from the SPSR.
+                let returns = insn.mnemonic == Mnemonic::RFE
+                    || (insn.state.is_thumb() && insn.raw & 0xffff_ff00 == T32_SUBS_PC_LR);
+                if !returns && target & 1 != 0 {
                     self.cpu.cpsr.t = true;
                 }
                 self.cpu.regs[15] = target & !1;
-                if advance_it {
+                if advance_it && !returns {
                     self.cpu.cpsr.advance_it_state();
                 }
             }

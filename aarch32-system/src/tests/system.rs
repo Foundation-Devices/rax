@@ -652,7 +652,6 @@ fn exception_returns_restore_the_state_of_the_architecture() {
 }
 
 #[test]
-#[ignore = "the T32 decoder has no SUBS PC, LR and no RFE: an undefined instruction"]
 fn t32_exception_returns_restore_the_state_of_the_architecture() {
     let mut trio = Trio::new();
     cases(

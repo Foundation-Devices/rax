@@ -68,7 +68,7 @@ All the commands are for the directory of rax. The tests are in `src/tests.rs`,
 
 ### Quick tier
 
-`cargo test --release -p rax-aarch32-system`: 35 tests in about 30 s on an Apple
+`cargo test --release -p rax-aarch32-system`: 38 tests in about 30 s on an Apple
 M-series host (110 s of CPU time). `--no-default-features` runs the same tests with no
 compiler, as on another host. The dev profile passes too (its overflow checks see what
 a release build does not): there `RAX_SOAK_SECONDS=40` gives each random test a time
@@ -105,8 +105,8 @@ the tests take an other seed, thus an other run has other cases.
 
 ### Ignored tests
 
-`cargo test --release -p rax-aarch32-system -- --ignored` runs two tests that fail, each
-for a fault that is open: the reason is in its `#[ignore]`.
+`cargo test --release -p rax-aarch32-system -- --ignored` runs one test that fails:
+it shows an order of calls that a machine must not use (the reason is in its `#[ignore]`).
 
 ### A failure
 

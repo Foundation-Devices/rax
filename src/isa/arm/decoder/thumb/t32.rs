@@ -12,7 +12,10 @@ impl ThumbDecoder {
         let reg_list = (raw & 0xFFFF) as u16;
 
         // op = bits[24:23]: 01 = increment-after, 10 = decrement-before.
+        // 00 and 11 are SRS and RFE, decrement-before and increment-after.
         let mnemonic = match ((raw >> 23) & 3, l) {
+            (0b00 | 0b11, 1) if reg_list == 0xC000 => Mnemonic::RFE,
+            (0b00 | 0b11, 0) if rn == 13 && reg_list & 0xFFE0 == 0xC000 => Mnemonic::SRS,
             (0b01, 1) => Mnemonic::LDMIA,
             (0b01, 0) => Mnemonic::STMIA,
             (0b10, 1) => Mnemonic::LDMDB,
@@ -31,6 +34,9 @@ impl ThumbDecoder {
         let is_push_pop = matches!(mnemonic, Mnemonic::PUSH | Mnemonic::POP);
 
         let mut insn = DecodedInsn::new(mnemonic, ExecutionState::Thumb2, raw, 4);
+        if matches!(mnemonic, Mnemonic::RFE | Mnemonic::SRS) {
+            return Ok(insn);
+        }
 
         if !is_push_pop {
             insn = insn.with_operand(Operand::Reg(Self::any_reg(rn)));
@@ -684,8 +690,8 @@ impl ThumbDecoder {
     /// The rest of "Branches and miscellaneous control" (op2 = 0x0 with
     /// op1 = x111xxx, and UDF): MSR and MRS (the banked forms, hw2 bit 5
     /// set, are not decoded), the hints and CPS, CLREX and the barriers,
-    /// BXJ (BX, as Jazelle is trivial), HVC, and UDF. ERET and SMC are not
-    /// decoded.
+    /// BXJ (BX, as Jazelle is trivial), SUBS PC, LR (ERET is its form with
+    /// no offset), HVC, and UDF. SMC is not decoded.
     fn decode_32bit_misc_control(raw: u32) -> DecodedInsn {
         let hw1 = (raw >> 16) as u16;
         let hw2 = raw as u16;
@@ -721,6 +727,14 @@ impl ThumbDecoder {
             }
             (0x3C, 0b000 | 0b010) => {
                 insn(Mnemonic::BX).with_operand(Operand::Reg(Self::any_reg((hw1 & 0xF) as u8)))
+            }
+            (0x3D, 0b000) if hw1 & 0xF == 14 && hw2 & 0xFF00 == 0x8F00 => {
+                let mut subs = insn(Mnemonic::SUBS)
+                    .with_operand(Operand::Reg(Self::any_reg(15)))
+                    .with_operand(Operand::Reg(Self::any_reg(14)))
+                    .with_operand(Operand::Imm(Immediate::new((hw2 & 0xFF) as i64)));
+                subs.sets_flags = true;
+                subs
             }
             (0x3E | 0x3F, 0b000 | 0b010) if !banked => insn(Mnemonic::MRS),
             (0x7F, 0b010) => insn(Mnemonic::UDF),

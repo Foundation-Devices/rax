@@ -161,3 +161,58 @@ fn vqdmlal_saturates_the_doubled_product_before_the_sum() {
     assert_eq!(outcome.fpscr, 1 << 27);
     assert_eq!(outcome.stop, None);
 }
+
+#[test]
+fn t32_srs_stores_lr_and_the_spsr_on_the_stack_of_its_mode() {
+    let mut trio = Trio::new();
+    // SRSDB sp!, #19 two times; SRSIA sp!, #31.
+    let program = thumb_program(vec![
+        wide(0xe82d_c013),
+        wide(0xe82d_c013),
+        wide(0xe9ad_c01f),
+    ]);
+    let mut case = Case::new(&mut Random(19), true);
+    let (svc_stack, user_stack) = (DATA + 0x200, DATA + 0x300);
+    let spsr = rax::arm::Psr::from_u32(0x6000_0030);
+    case.cpu.cpsr.mode = 0x12;
+    case.cpu.regs[14] = 0x1234_5679;
+    case.cpu.spsr_irq = spsr.clone();
+    case.cpu.regs_svc[0] = svc_stack;
+    case.cpu.regs_usr[0] = user_stack;
+    case.load(&program);
+    case.enter(&program);
+    case.until = 3;
+    let outcome = run(&mut trio, &case);
+    let saved: Vec<u8> = [0x1234_5679, spsr.to_u32()]
+        .iter()
+        .flat_map(|word| word.to_le_bytes())
+        .collect();
+    for at in [svc_stack - 16, svc_stack - 8, user_stack] {
+        let at = (at - RAM_BASE) as usize;
+        assert_eq!(outcome.ram[at..at + 8], saved);
+    }
+    assert_eq!(outcome.stop, None);
+}
+
+#[test]
+fn t32_exception_return_in_an_it_block_takes_the_it_state_of_the_spsr() {
+    let mut trio = Trio::new();
+    // IT EQ; SUBS pc, lr, #4.
+    let program = thumb_program(vec![t16(0xbf08), wide(0xf3de_8f04)]);
+    let mut case = Case::new(&mut Random(20), true);
+    // Thumb, System mode, the IT state of ITTE with one instruction done.
+    let spsr = rax::arm::Psr::from_u32(0x2600_a03f);
+    case.cpu.cpsr.mode = 0x12;
+    case.cpu.cpsr.z = true;
+    case.cpu.regs[14] = CODE + 0x806;
+    case.cpu.spsr_irq = spsr.clone();
+    case.load(&program);
+    case.enter(&program);
+    case.until = 2;
+    let outcome = run(&mut trio, &case);
+    assert_eq!(
+        (outcome.cpsr, outcome.regs[15]),
+        (spsr.to_u32(), CODE + 0x802)
+    );
+    assert_eq!(outcome.stop, None);
+}

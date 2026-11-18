@@ -798,8 +798,13 @@ impl<'a, M: ArmMemory> Executor<'a, M> {
             return ExecResult::Undefined;
         }
         let raw = insn.raw;
-        let p = (raw >> 24) & 1 == 1;
         let u = (raw >> 23) & 1 == 1;
+        // T32 has only the DB and IA forms, with P equal to U in its encoding.
+        let p = if insn.state.is_thumb() {
+            !u
+        } else {
+            (raw >> 24) & 1 == 1
+        };
         let w = (raw >> 21) & 1 == 1;
         let mode_bits = (raw & 0x1F) as u8;
         let cur_mode = self.cpu.cpsr.mode;
@@ -836,8 +841,13 @@ impl<'a, M: ArmMemory> Executor<'a, M> {
             return ExecResult::Undefined;
         }
         let raw = insn.raw;
-        let p = (raw >> 24) & 1 == 1;
         let u = (raw >> 23) & 1 == 1;
+        // T32 has only the DB and IA forms, with P equal to U in its encoding.
+        let p = if insn.state.is_thumb() {
+            !u
+        } else {
+            (raw >> 24) & 1 == 1
+        };
         let w = (raw >> 21) & 1 == 1;
         let n = ((raw >> 16) & 0xF) as usize;
         let base = self.cpu.regs[n];

@@ -352,6 +352,36 @@ fn t32_push_and_pop_are_stmdb_and_ldmia_of_sp_with_writeback() {
 }
 
 #[test]
+fn t32_exception_returns_and_srs_decode() {
+    // Encodings from Apple clang 21 (-target armv7a-none-eabi, .thumb).
+    for (raw, mnemonic) in [
+        (0xf3de_8f04, Mnemonic::SUBS),    // subs pc, lr, #4
+        (0xf3de_8f00, Mnemonic::SUBS),    // subs pc, lr, #0
+        (0xe9bd_c000, Mnemonic::RFE),     // rfeia sp!
+        (0xe810_c000, Mnemonic::RFE),     // rfedb r0
+        (0xe991_c000, Mnemonic::RFE),     // rfeia r1
+        (0xe82d_c013, Mnemonic::SRS),     // srsdb sp!, #19
+        (0xe9ad_c01f, Mnemonic::SRS),     // srsia sp!, #31
+        (0xe80d_c012, Mnemonic::SRS),     // srsdb sp, #18
+        (0xe810_c001, Mnemonic::UNKNOWN), // rfedb r0 with a bit that is 0 in it
+        (0xe80c_c012, Mnemonic::UNKNOWN), // srsdb with a base that is not sp
+    ] {
+        let insn = ThumbDecoder::decode_32bit(raw).unwrap();
+        assert_eq!(insn.mnemonic, mnemonic, "{raw:#010x}");
+    }
+    let subs = ThumbDecoder::decode_32bit(0xf3de_8f04).unwrap();
+    assert!(subs.sets_flags);
+    assert_eq!(
+        subs.operands,
+        vec![
+            Operand::Reg(Register::arm32(15)),
+            Operand::Reg(Register::arm32(14)),
+            Operand::Imm(Immediate::new(4)),
+        ]
+    );
+}
+
+#[test]
 fn t16_cps_decodes_and_setend_does_not() {
     // Encodings from LLVM 23.1.1 (llvm-mc -triple=thumbv7a).
     for (raw, mnemonic) in [
