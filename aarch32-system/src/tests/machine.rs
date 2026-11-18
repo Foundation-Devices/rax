@@ -200,9 +200,7 @@ impl Bus {
         }
         let pa = self.translate(va, V6Access::Write)?;
         match self.ram.kind(pa) {
-            Kind::Fault | Kind::ReadOnly => {
-                Err(self.fail(va, FS_EXTERNAL_ABORT, V6Access::Write))
-            }
+            Kind::Fault | Kind::ReadOnly => Err(self.fail(va, FS_EXTERNAL_ABORT, V6Access::Write)),
             Kind::Device => {
                 self.device_access.set(true);
                 self.deadline = self.now + 1 + u64::from(bytes[0] & 63);
@@ -417,7 +415,10 @@ fn slow_access(
     };
     let rest = i64::from(info >> 8);
     let before = run.room - run.context.budget - rest;
-    assert!(before >= 0 && rest >= 1, "budget of a call: {before} {rest}");
+    assert!(
+        before >= 0 && rest >= 1,
+        "budget of a call: {before} {rest}"
+    );
     bus.now = run.start + before as u64;
     bus.slow_calls += 1;
     bus.device_access.take();
@@ -700,7 +701,11 @@ impl Machine {
                     self.left.as_ref().map(|(_, index)| index)
                 );
             }
-            if self.starts.as_ref().is_some_and(|starts| !starts.contains(&pc)) {
+            if self
+                .starts
+                .as_ref()
+                .is_some_and(|starts| !starts.contains(&pc))
+            {
                 self.stop = Some(Stop::LeftProgram);
                 break;
             }
@@ -851,7 +856,10 @@ impl Machine {
                 &mut self.bus,
                 &mut NoHook,
             );
-            assert!(count <= limit, "{count} instructions with a limit of {limit}");
+            assert!(
+                count <= limit,
+                "{count} instructions with a limit of {limit}"
+            );
             self.instructions += count as u64;
             limit -= count;
             let slow = match exit {

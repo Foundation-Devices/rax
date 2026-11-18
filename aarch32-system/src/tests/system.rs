@@ -7,13 +7,16 @@ use super::Random;
 use super::corrections::{arm_program, run, thumb_program, vectors_that_stop};
 use super::machine::Stop;
 use super::programs::VECTORS;
-use super::suite::{
-    CODE, Case, FAULT_PAGE, Program, Trio, cases, random_cpu, t16, wide,
-};
+use super::suite::{CODE, Case, FAULT_PAGE, Program, Trio, cases, random_cpu, t16, wide};
 
 /// ConditionPassed, from the flags in the bits 3:0 as N, Z, C, V.
 fn condition_passed(cond: u32, flags: u32) -> bool {
-    let (n, z, c, v) = (flags & 8 != 0, flags & 4 != 0, flags & 2 != 0, flags & 1 != 0);
+    let (n, z, c, v) = (
+        flags & 8 != 0,
+        flags & 4 != 0,
+        flags & 2 != 0,
+        flags & 1 != 0,
+    );
     let result = match cond >> 1 {
         0 => z,
         1 => c,
@@ -24,12 +27,21 @@ fn condition_passed(cond: u32, flags: u32) -> bool {
         6 => n == v && !z,
         _ => true,
     };
-    if cond & 1 != 0 && cond != 15 { !result } else { result }
+    if cond & 1 != 0 && cond != 15 {
+        !result
+    } else {
+        result
+    }
 }
 
 fn set_flags(case: &mut Case, flags: u32) {
     let cpsr = &mut case.cpu.cpsr;
-    (cpsr.n, cpsr.z, cpsr.c, cpsr.v) = (flags & 8 != 0, flags & 4 != 0, flags & 2 != 0, flags & 1 != 0);
+    (cpsr.n, cpsr.z, cpsr.c, cpsr.v) = (
+        flags & 8 != 0,
+        flags & 4 != 0,
+        flags & 2 != 0,
+        flags & 1 != 0,
+    );
 }
 
 #[test]
@@ -56,7 +68,11 @@ fn each_condition_with_each_value_of_the_flags() {
             case.until = 8;
             let outcome = run(&mut trio, &case);
             let apsr = if passed == 1 { flags << 28 | 0xd3 } else { 0 };
-            assert_eq!(outcome.regs[..4], [passed, apsr, 1 - passed, 1], "A32 {cond} {flags:#x}");
+            assert_eq!(
+                outcome.regs[..4],
+                [passed, apsr, 1 - passed, 1],
+                "A32 {cond} {flags:#x}"
+            );
             assert_eq!(outcome.cpsr >> 28, flags);
 
             // Thumb: a branch with the condition over MOVS r2, #1, with 16 and 32 bits.
@@ -79,7 +95,11 @@ fn each_condition_with_each_value_of_the_flags() {
                 case.enter(&program);
                 case.until = 8;
                 let outcome = run(&mut trio, &case);
-                assert_eq!(outcome.regs[2..4], [1 - passed, 1], "Thumb {cond} {flags:#x}");
+                assert_eq!(
+                    outcome.regs[2..4],
+                    [1 - passed, 1],
+                    "Thumb {cond} {flags:#x}"
+                );
             }
         }
     }
@@ -127,7 +147,11 @@ fn it_blocks_of_each_shape_with_each_value_of_the_flags() {
                         u32::from(condition_passed(cond, flags))
                     })
                     .collect();
-                assert_eq!(outcome.regs[1..5], expected, "IT {first} {mask:#x} flags {flags:#x}");
+                assert_eq!(
+                    outcome.regs[1..5],
+                    expected,
+                    "IT {first} {mask:#x} flags {flags:#x}"
+                );
                 assert_eq!((outcome.cpsr >> 28, outcome.stop), (flags, None));
             }
         }
@@ -178,7 +202,11 @@ fn exception_entry(trio: &mut Trio, random: &mut Random) -> Result<(), String> {
     cpu.cpsr.z = true;
     cpu.regs[1] = FAULT_PAGE + random.below(64) * 4;
     // The instruction of the exception: its bytes, and its length.
-    let nop = if thumb { t16(0xbf00) } else { wide(0xe1a0_0000) };
+    let nop = if thumb {
+        t16(0xbf00)
+    } else {
+        wide(0xe1a0_0000)
+    };
     let cause = match (entry, thumb) {
         (Entry::Undefined, false) => wide(0xe7f0_00f0),
         (Entry::Undefined, true) if wide_form => wide(0xf7f0_a000),
@@ -228,7 +256,13 @@ fn exception_entry(trio: &mut Trio, random: &mut Random) -> Result<(), String> {
     // The IT bits when the exception comes: those of the instruction in the block.
     let it_state = if in_it { 0x08 } else { 0 };
     let (mode, vector, link, saved_it, masks_aborts) = match entry {
-        Entry::Undefined => (0x1b, 0x04, cause_address + if thumb { 2 } else { 4 }, it_state, false),
+        Entry::Undefined => (
+            0x1b,
+            0x04,
+            cause_address + if thumb { 2 } else { 4 },
+            it_state,
+            false,
+        ),
         // The saved IT bits of an SVC are those of the next instruction.
         Entry::Svc => (0x13, 0x08, cause_address + u32::from(cause.size), 0, false),
         Entry::Breakpoint => (0x17, 0x0c, cause_address + 4, it_state, true),
@@ -376,13 +410,22 @@ fn mode_changes(trio: &mut Trio, random: &mut Random) -> Result<(), String> {
     let outcome = trio.run(&case)?;
 
     // A CPS or an MSR of the mode in User mode changes nothing.
-    let (second, third) = if second == 0x10 { (0x10, 0x10) } else { (second, third) };
+    let (second, third) = if second == 0x10 {
+        (0x10, 0x10)
+    } else {
+        (second, third)
+    };
     let mut expected = banks;
     let first_read = expected[bank(second)];
     expected[bank(second)] = new;
     let second_read = expected[bank(third)];
     let registers = [first_read[0], first_read[1], second_read[0], second_read[1]];
-    let engines = [outcome.regs[0], outcome.regs[1], outcome.regs[6], outcome.regs[7]];
+    let engines = [
+        outcome.regs[0],
+        outcome.regs[1],
+        outcome.regs[6],
+        outcome.regs[7],
+    ];
     let high_now = high[usize::from(third == 0x11)];
     if engines == registers && outcome.regs[8..13] == high_now && outcome.cpsr & 0x1f == third {
         return Ok(());
@@ -397,9 +440,12 @@ fn mode_changes(trio: &mut Trio, random: &mut Random) -> Result<(), String> {
 #[test]
 fn each_mode_has_its_registers() {
     let mut trio = Trio::new();
-    cases("each_mode_has_its_registers", 0x0a11_ce5e_ed00_000a, 4_000, |random| {
-        mode_changes(&mut trio, random)
-    });
+    cases(
+        "each_mode_has_its_registers",
+        0x0a11_ce5e_ed00_000a,
+        4_000,
+        |random| mode_changes(&mut trio, random),
+    );
 }
 
 /// MSR of the CPSR and of the SPSR with each field mask, MRS, and the returns from an
@@ -453,7 +499,11 @@ fn status_registers(trio: &mut Trio, random: &mut Random) -> Result<(), String> 
     // The bits of each field of the mask. ARMv7 has no bit at 23:20, and no engine
     // has Jazelle (bit 24).
     let field_mask = (0..4).fold(0, |mask, field| {
-        mask | if fields >> field & 1 != 0 { 0xff << (8 * field) } else { 0 }
+        mask | if fields >> field & 1 != 0 {
+            0xff << (8 * field)
+        } else {
+            0
+        }
     }) & !0x01f0_0000;
     let privileged = mode != 0x10;
     // An MSR of the CPSR writes the flags, Q and GE, E, and with a privilege A, I, F
@@ -469,7 +519,11 @@ fn status_registers(trio: &mut Trio, random: &mut Random) -> Result<(), String> 
             (case.cpu.regs[1], old & !mask | value & mask, spsr)
         }
         2 => (Psr::from_u32(spsr).to_u32(), old, spsr),
-        _ => (case.cpu.regs[1], old, spsr & !field_mask | value & field_mask),
+        _ => (
+            case.cpu.regs[1],
+            old,
+            spsr & !field_mask | value & field_mask,
+        ),
     };
     let saved = if has_spsr {
         outcome.banked[spsr_index(mode)]
@@ -477,7 +531,11 @@ fn status_registers(trio: &mut Trio, random: &mut Random) -> Result<(), String> 
         Psr::from_u32(new_spsr).to_u32()
     };
     let expected = (r1, cpsr, Psr::from_u32(new_spsr).to_u32());
-    let read = if kind == 0 { outcome.regs[1] & visible } else { outcome.regs[1] };
+    let read = if kind == 0 {
+        outcome.regs[1] & visible
+    } else {
+        outcome.regs[1]
+    };
     let engines = (read, outcome.cpsr, saved);
     if engines == expected && outcome.stop.is_none() {
         return Ok(());

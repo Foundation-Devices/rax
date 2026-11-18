@@ -7,7 +7,8 @@ use super::programs::VECTORS;
 use super::suite::{CODE, Case, DATA, Insn, Program, Trio, t16, wide};
 
 pub fn run(trio: &mut Trio, case: &Case) -> Outcome {
-    trio.run(case).unwrap_or_else(|difference| panic!("{difference}"))
+    trio.run(case)
+        .unwrap_or_else(|difference| panic!("{difference}"))
 }
 
 pub fn thumb_program(insns: Vec<Insn>) -> Program {
@@ -50,7 +51,10 @@ fn t32_smlal_of_halves_adds_the_product_to_the_two_registers() {
     let outcome = run(&mut trio, &case);
     // 0x1_ffff_ffff - 0x7fff * 0x8000, and 5 - 3 * 2.
     assert_eq!((outcome.regs[8], outcome.regs[12]), (1, 0xc000_7fff));
-    assert_eq!((outcome.regs[2], outcome.regs[1]), (0xffff_ffff, 0xffff_ffff));
+    assert_eq!(
+        (outcome.regs[2], outcome.regs[1]),
+        (0xffff_ffff, 0xffff_ffff)
+    );
     assert_eq!(outcome.stop, None);
 }
 
@@ -74,7 +78,13 @@ fn bkpt_runs_in_an_it_block_with_a_false_condition() {
 fn svc_in_an_it_block_returns_with_the_it_bits_of_the_next_instruction() {
     let mut trio = Trio::new();
     // ITE EQ; SVC 0; MOVS r2, #1 (not run: NE); MOVS r3, #1.
-    let program = thumb_program(vec![t16(0xbf0c), t16(0xdf00), t16(0x2201), t16(0x2301), t16(0xbe00)]);
+    let program = thumb_program(vec![
+        t16(0xbf0c),
+        t16(0xdf00),
+        t16(0x2201),
+        t16(0x2301),
+        t16(0xbe00),
+    ]);
     let mut case = Case::new(&mut Random(14), true);
     case.only_starts = false;
     vectors_that_stop(&mut case);
@@ -107,7 +117,10 @@ fn a32_register_offset_with_rrx_shifts_the_carry_in() {
     case.until = 2;
     let outcome = run(&mut trio, &case);
     let stored = (DATA + 0x100 - RAM_BASE) as usize;
-    assert_eq!(outcome.ram[stored..stored + 4], 0x1234_5678_u32.to_le_bytes());
+    assert_eq!(
+        outcome.ram[stored..stored + 4],
+        0x1234_5678_u32.to_le_bytes()
+    );
     assert_eq!(outcome.regs[3], 0x9abc_def0);
     assert_eq!(outcome.regs[4], (DATA + 0x200).wrapping_add(0x8000_0020));
     assert_eq!(outcome.stop, None);

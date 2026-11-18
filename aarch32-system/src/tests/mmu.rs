@@ -95,7 +95,8 @@ fn translation_case(random: &mut Random) -> Case {
     let slots = 6 + random.below(24) as usize;
     let start = random.below(64) * 4;
     for page in [CODE, OTHER_CODE] {
-        case.ram.write_words(page + start, &image(random, slots, user));
+        case.ram
+            .write_words(page + start, &image(random, slots, user));
     }
     for slot in 0..slots as u32 + 1 {
         let next = start + (slot + 1) * 4;
@@ -104,13 +105,17 @@ fn translation_case(random: &mut Random) -> Case {
     }
     for space in 0..2 {
         let (first, second) = (FIRST_LEVEL[space], SECOND_LEVEL[space]);
-        case.ram.write_words(first + (RAM_BASE >> 20) * 4, &[second | 1]);
+        case.ram
+            .write_words(first + (RAM_BASE >> 20) * 4, &[second | 1]);
         for page in 0..32 {
-            case.ram.write_words(second + page * 4, &[RAM_BASE + page * PAGE | SMALL_PAGE]);
+            case.ram
+                .write_words(second + page * 4, &[RAM_BASE + page * PAGE | SMALL_PAGE]);
         }
         let code = [CODE, OTHER_CODE][space];
-        case.ram.write_words(second + (CODE - RAM_BASE) / PAGE * 4, &[code | SMALL_PAGE]);
-        case.ram.write_words(second + (ALIAS - RAM_BASE) / PAGE * 4, &[code | SMALL_PAGE]);
+        case.ram
+            .write_words(second + (CODE - RAM_BASE) / PAGE * 4, &[code | SMALL_PAGE]);
+        case.ram
+            .write_words(second + (ALIAS - RAM_BASE) / PAGE * 4, &[code | SMALL_PAGE]);
         let guard = if space == 0 { READ_ONLY } else { 0 };
         case.ram.write_words(
             second + (GUARDED - RAM_BASE) / PAGE * 4,
@@ -156,9 +161,18 @@ fn programs_that_change_the_translation_run_the_same_with_each_engine() {
             trio.run(&case).map(|_| ())
         },
     );
-    eprintln!("{:?} {:?} {:?}", trio.ends, trio.compiled_share(), trio.totals);
+    eprintln!(
+        "{:?} {:?} {:?}",
+        trio.ends,
+        trio.compiled_share(),
+        trio.totals
+    );
     // Most cases run to the stop of a program or to the last instruction of the case.
     let ends = |name: &str| trio.ends.get(name).copied().unwrap_or(0);
-    assert!(ends("Breakpoint") + ends("limit") > 3_500, "{:?}", trio.ends);
+    assert!(
+        ends("Breakpoint") + ends("limit") > 3_500,
+        "{:?}",
+        trio.ends
+    );
     assert!(trio.compiled_share().is_none_or(|share| share > 0.1));
 }

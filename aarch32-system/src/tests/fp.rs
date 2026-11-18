@@ -151,16 +151,62 @@ fn arithmetic(random: &mut Random) -> (u32, Apply) {
                 // VMLA, VMLS, VNMLA and VNMLS round the product, then the sum.
                 (5, true) => host!(state, a, b, c, "fmul d3, d1, d2", "fadd d0, d0, d3"),
                 (5, false) => host!(state, a, b, c, "fmul s3, s1, s2", "fadd s0, s0, s3"),
-                (6, true) => host!(state, a, b, c, "fmul d3, d1, d2", "fneg d3, d3", "fadd d0, d0, d3"),
-                (6, false) => host!(state, a, b, c, "fmul s3, s1, s2", "fneg s3, s3", "fadd s0, s0, s3"),
+                (6, true) => host!(
+                    state,
+                    a,
+                    b,
+                    c,
+                    "fmul d3, d1, d2",
+                    "fneg d3, d3",
+                    "fadd d0, d0, d3"
+                ),
+                (6, false) => host!(
+                    state,
+                    a,
+                    b,
+                    c,
+                    "fmul s3, s1, s2",
+                    "fneg s3, s3",
+                    "fadd s0, s0, s3"
+                ),
                 (7, true) => host!(
-                    state, a, b, c, "fmul d3, d1, d2", "fneg d3, d3", "fneg d0, d0", "fadd d0, d0, d3"
+                    state,
+                    a,
+                    b,
+                    c,
+                    "fmul d3, d1, d2",
+                    "fneg d3, d3",
+                    "fneg d0, d0",
+                    "fadd d0, d0, d3"
                 ),
                 (7, false) => host!(
-                    state, a, b, c, "fmul s3, s1, s2", "fneg s3, s3", "fneg s0, s0", "fadd s0, s0, s3"
+                    state,
+                    a,
+                    b,
+                    c,
+                    "fmul s3, s1, s2",
+                    "fneg s3, s3",
+                    "fneg s0, s0",
+                    "fadd s0, s0, s3"
                 ),
-                (8, true) => host!(state, a, b, c, "fmul d3, d1, d2", "fneg d0, d0", "fadd d0, d0, d3"),
-                (8, false) => host!(state, a, b, c, "fmul s3, s1, s2", "fneg s0, s0", "fadd s0, s0, s3"),
+                (8, true) => host!(
+                    state,
+                    a,
+                    b,
+                    c,
+                    "fmul d3, d1, d2",
+                    "fneg d0, d0",
+                    "fadd d0, d0, d3"
+                ),
+                (8, false) => host!(
+                    state,
+                    a,
+                    b,
+                    c,
+                    "fmul s3, s1, s2",
+                    "fneg s0, s0",
+                    "fadd s0, s0, s3"
+                ),
                 // VFMA, VFMS, VFNMA and VFNMS round one time.
                 (9, true) => host!(state, a, b, c, "fmadd d0, d1, d2, d0"),
                 (9, false) => host!(state, a, b, c, "fmadd s0, s1, s2, s0"),
@@ -204,7 +250,13 @@ fn one_operand(random: &mut Random) -> (u32, Apply) {
                 | fields(double, 0, 0, m)
         }
         // From an integer: unsigned or signed.
-        9 => 0xeeb8_0a40 | random.below(2) << 7 | size | fields(double, d, 0, 0) | single_field(sm, 0, 5),
+        9 => {
+            0xeeb8_0a40
+                | random.below(2) << 7
+                | size
+                | fields(double, d, 0, 0)
+                | single_field(sm, 0, 5)
+        }
         // Between the two sizes: `size` is that of the operand.
         10 => {
             0xeeb7_0ac0
@@ -262,21 +314,61 @@ fn one_operand(random: &mut Random) -> (u32, Apply) {
                     let before = state.fpscr;
                     state.fpscr &= !FLAGS;
                     let (result, _) = match (bit7, unsigned_or_quiet, double) {
-                        (true, true, true) => host!(state, b, 0u64, 0u64, "fcvtzu w9, d0", "fmov s0, w9"),
-                        (true, true, false) => host!(state, b, 0u64, 0u64, "fcvtzu w9, s0", "fmov s0, w9"),
-                        (true, false, true) => host!(state, b, 0u64, 0u64, "fcvtzs w9, d0", "fmov s0, w9"),
-                        (true, false, false) => host!(state, b, 0u64, 0u64, "fcvtzs w9, s0", "fmov s0, w9"),
+                        (true, true, true) => {
+                            host!(state, b, 0u64, 0u64, "fcvtzu w9, d0", "fmov s0, w9")
+                        }
+                        (true, true, false) => {
+                            host!(state, b, 0u64, 0u64, "fcvtzu w9, s0", "fmov s0, w9")
+                        }
+                        (true, false, true) => {
+                            host!(state, b, 0u64, 0u64, "fcvtzs w9, d0", "fmov s0, w9")
+                        }
+                        (true, false, false) => {
+                            host!(state, b, 0u64, 0u64, "fcvtzs w9, s0", "fmov s0, w9")
+                        }
                         (false, true, true) => {
-                            host!(state, b, 0u64, 0u64, "frintx d0, d0", "fcvtzu w9, d0", "fmov s0, w9")
+                            host!(
+                                state,
+                                b,
+                                0u64,
+                                0u64,
+                                "frintx d0, d0",
+                                "fcvtzu w9, d0",
+                                "fmov s0, w9"
+                            )
                         }
                         (false, true, false) => {
-                            host!(state, b, 0u64, 0u64, "frintx s0, s0", "fcvtzu w9, s0", "fmov s0, w9")
+                            host!(
+                                state,
+                                b,
+                                0u64,
+                                0u64,
+                                "frintx s0, s0",
+                                "fcvtzu w9, s0",
+                                "fmov s0, w9"
+                            )
                         }
                         (false, false, true) => {
-                            host!(state, b, 0u64, 0u64, "frintx d0, d0", "fcvtzs w9, d0", "fmov s0, w9")
+                            host!(
+                                state,
+                                b,
+                                0u64,
+                                0u64,
+                                "frintx d0, d0",
+                                "fcvtzs w9, d0",
+                                "fmov s0, w9"
+                            )
                         }
                         (false, false, false) => {
-                            host!(state, b, 0u64, 0u64, "frintx s0, s0", "fcvtzs w9, s0", "fmov s0, w9")
+                            host!(
+                                state,
+                                b,
+                                0u64,
+                                0u64,
+                                "frintx s0, s0",
+                                "fcvtzs w9, s0",
+                                "fmov s0, w9"
+                            )
                         }
                     };
                     // A result out of the range is an invalid operation and not an
@@ -290,10 +382,18 @@ fn one_operand(random: &mut Random) -> (u32, Apply) {
                 9 => {
                     let integer = state.s(sm);
                     let (result, _) = match (bit7, double) {
-                        (true, true) => host!(state, integer, 0u64, 0u64, "fmov w9, s0", "scvtf d0, w9"),
-                        (true, false) => host!(state, integer, 0u64, 0u64, "fmov w9, s0", "scvtf s0, w9"),
-                        (false, true) => host!(state, integer, 0u64, 0u64, "fmov w9, s0", "ucvtf d0, w9"),
-                        (false, false) => host!(state, integer, 0u64, 0u64, "fmov w9, s0", "ucvtf s0, w9"),
+                        (true, true) => {
+                            host!(state, integer, 0u64, 0u64, "fmov w9, s0", "scvtf d0, w9")
+                        }
+                        (true, false) => {
+                            host!(state, integer, 0u64, 0u64, "fmov w9, s0", "scvtf s0, w9")
+                        }
+                        (false, true) => {
+                            host!(state, integer, 0u64, 0u64, "fmov w9, s0", "ucvtf d0, w9")
+                        }
+                        (false, false) => {
+                            host!(state, integer, 0u64, 0u64, "fmov w9, s0", "ucvtf s0, w9")
+                        }
                     };
                     state.set(double, d, result);
                 }
@@ -323,28 +423,90 @@ fn one_operand(random: &mut Random) -> (u32, Apply) {
                     let down_single = u64::from((-(fraction as f32)).exp2().to_bits());
                     let (result, _) = match (to_fixed, signed, double) {
                         (false, true, true) => {
-                            host!(state, a, down, 0u64, "fmov w9, s0", "scvtf d0, w9", "fmul d0, d0, d1")
+                            host!(
+                                state,
+                                a,
+                                down,
+                                0u64,
+                                "fmov w9, s0",
+                                "scvtf d0, w9",
+                                "fmul d0, d0, d1"
+                            )
                         }
                         (false, false, true) => {
-                            host!(state, a, down, 0u64, "fmov w9, s0", "ucvtf d0, w9", "fmul d0, d0, d1")
+                            host!(
+                                state,
+                                a,
+                                down,
+                                0u64,
+                                "fmov w9, s0",
+                                "ucvtf d0, w9",
+                                "fmul d0, d0, d1"
+                            )
                         }
                         (false, true, false) => {
-                            host!(state, a, down_single, 0u64, "fmov w9, s0", "scvtf s0, w9", "fmul s0, s0, s1")
+                            host!(
+                                state,
+                                a,
+                                down_single,
+                                0u64,
+                                "fmov w9, s0",
+                                "scvtf s0, w9",
+                                "fmul s0, s0, s1"
+                            )
                         }
                         (false, false, false) => {
-                            host!(state, a, down_single, 0u64, "fmov w9, s0", "ucvtf s0, w9", "fmul s0, s0, s1")
+                            host!(
+                                state,
+                                a,
+                                down_single,
+                                0u64,
+                                "fmov w9, s0",
+                                "ucvtf s0, w9",
+                                "fmul s0, s0, s1"
+                            )
                         }
                         (true, true, true) => {
-                            host!(state, a, up, 0u64, "fmul d0, d0, d1", "fcvtzs w9, d0", "fmov s0, w9")
+                            host!(
+                                state,
+                                a,
+                                up,
+                                0u64,
+                                "fmul d0, d0, d1",
+                                "fcvtzs w9, d0",
+                                "fmov s0, w9"
+                            )
                         }
                         (true, false, true) => {
-                            host!(state, a, up, 0u64, "fmul d0, d0, d1", "fcvtzu w9, d0", "fmov s0, w9")
+                            host!(
+                                state,
+                                a,
+                                up,
+                                0u64,
+                                "fmul d0, d0, d1",
+                                "fcvtzu w9, d0",
+                                "fmov s0, w9"
+                            )
                         }
                         (true, true, false) => host!(
-                            state, a, up, 0u64, "fcvt d0, s0", "fmul d0, d0, d1", "fcvtzs w9, d0", "fmov s0, w9"
+                            state,
+                            a,
+                            up,
+                            0u64,
+                            "fcvt d0, s0",
+                            "fmul d0, d0, d1",
+                            "fcvtzs w9, d0",
+                            "fmov s0, w9"
                         ),
                         (true, false, false) => host!(
-                            state, a, up, 0u64, "fcvt d0, s0", "fmul d0, d0, d1", "fcvtzu w9, d0", "fmov s0, w9"
+                            state,
+                            a,
+                            up,
+                            0u64,
+                            "fcvt d0, s0",
+                            "fmul d0, d0, d1",
+                            "fcvtzu w9, d0",
+                            "fmov s0, w9"
                         ),
                     };
                     // A product out of the range of the host is an invalid operation
@@ -418,7 +580,9 @@ fn random_double(random: &mut Random) -> u64 {
         0 | 1 => DOUBLES[random.below(DOUBLES.len() as u32) as usize],
         2 => f64::from(random.next() as i32 >> random.below(32)).to_bits(),
         3 => f64::from(random_single(random) as f32).to_bits(),
-        4 => (1.0 + f64::from(random.below(64)) / 16.0).to_bits() | u64::from(random.below(2)) << 63,
+        4 => {
+            (1.0 + f64::from(random.below(64)) / 16.0).to_bits() | u64::from(random.below(2)) << 63
+        }
         5 => bits & 0x800f_ffff_ffff_ffff | u64::from(random.below(80)) << 52,
         6 => bits & 0x800f_ffff_ffff_ffff | u64::from(1967 + random.below(80)) << 52,
         _ => bits,
@@ -442,7 +606,11 @@ fn check(trio: &mut Trio, random: &mut Random) -> Result<(), String> {
         };
     }
     // Most cases have round to nearest, as most code has.
-    let modes = if random.below(2) == 0 { 0 } else { random.next() & MODES };
+    let modes = if random.below(2) == 0 {
+        0
+    } else {
+        random.next() & MODES
+    };
     case.cpu.vfp.fpscr = Fpscr::from_bits(modes | random.next() & (0xf000_0000 | FLAGS));
     // The instruction, then a branch back to it: the second run of the instruction
     // is one of the fast interpreter and of the compiled code.
@@ -452,7 +620,11 @@ fn check(trio: &mut Trio, random: &mut Random) -> Result<(), String> {
         at,
         insns: vec![
             wide(raw),
-            if thumb { super::suite::t16(0xe7fc) } else { wide(0xeaff_fffd) },
+            if thumb {
+                super::suite::t16(0xe7fc)
+            } else {
+                wide(0xeaff_fffd)
+            },
         ],
     };
     case.load(&program);
@@ -474,7 +646,12 @@ fn check(trio: &mut Trio, random: &mut Random) -> Result<(), String> {
     }
     let different: Vec<_> = (0..32)
         .filter(|&index| engines.d[index] != state.d[index])
-        .map(|index| format!("d{index}: {:016x}, the host {:016x}", engines.d[index], state.d[index]))
+        .map(|index| {
+            format!(
+                "d{index}: {:016x}, the host {:016x}",
+                engines.d[index], state.d[index]
+            )
+        })
         .collect();
     Err(format!(
         "{:?} {:08x} : {} {raw:08x} from fpscr {:#x} dregs {:x?}\n  the engines: fpscr {:#x} {:?}\n  the host: fpscr {:#x}\n  {different:?}",

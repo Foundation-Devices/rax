@@ -55,7 +55,11 @@ fn random_program_case(random: &mut super::Random, kind: Programs) -> Case {
     case.until = 100 + u64::from(random.below(2500));
     if kind == Programs::System {
         // Some logs are in the page of the handlers: each write removes their code.
-        let log = if random.below(8) == 0 { VECTORS + 0x400 } else { LOG };
+        let log = if random.below(8) == 0 {
+            VECTORS + 0x400
+        } else {
+            LOG
+        };
         // Near the end of its page: the accesses of the program after it give aborts.
         case.cpu.regs[8] = CALL_PAGE + 0xf80 + random.below(32) * 4;
         install_vectors(&mut case, log);
@@ -84,7 +88,12 @@ fn random_programs_run_the_same_with_each_engine() {
             trio.run(&case).map(|_| ())
         },
     );
-    eprintln!("{:?} {:?} {:?}", trio.ends, trio.compiled_share(), trio.totals);
+    eprintln!(
+        "{:?} {:?} {:?}",
+        trio.ends,
+        trio.compiled_share(),
+        trio.totals
+    );
     assert!(trio.compiled_share().is_none_or(|share| share > 0.3));
 }
 
@@ -100,7 +109,12 @@ fn programs_that_change_their_code_run_the_same_with_each_engine() {
             trio.run(&case).map(|_| ())
         },
     );
-    eprintln!("{:?} {:?} {:?}", trio.ends, trio.compiled_share(), trio.totals);
+    eprintln!(
+        "{:?} {:?} {:?}",
+        trio.ends,
+        trio.compiled_share(),
+        trio.totals
+    );
 }
 
 #[test]
@@ -115,7 +129,12 @@ fn programs_with_exceptions_and_interrupts_run_the_same_with_each_engine() {
             trio.run(&case).map(|_| ())
         },
     );
-    eprintln!("{:?} {:?} {:?}", trio.ends, trio.compiled_share(), trio.totals);
+    eprintln!(
+        "{:?} {:?} {:?}",
+        trio.ends,
+        trio.compiled_share(),
+        trio.totals
+    );
 }
 
 #[test]
@@ -164,7 +183,11 @@ fn a_block_is_compiled_at_its_ninth_run() {
     assert_eq!(machine.jit.as_ref().unwrap().stats.compiled_blocks, 1);
     let counts = machine.counts;
     assert_eq!(
-        (counts.block_runs, counts.compiled_runs, counts.compiled_instructions),
+        (
+            counts.block_runs,
+            counts.compiled_runs,
+            counts.compiled_instructions
+        ),
         (9, 1, 12 * 3)
     );
     assert_eq!((machine.instructions, machine.cpu.regs[0]), (60, 20));
@@ -179,24 +202,43 @@ fn two_addresses_with_one_place_in_the_jump_table() {
     let mut case = Case::new(&mut super::Random(2), false);
     case.only_starts = false;
     case.fill_code(FAR, 0x1000, false);
-    let branch = |at: u32, target: u32| 0xea00_0000 | (target.wrapping_sub(at + 8) >> 2 & 0x00ff_ffff);
+    let branch =
+        |at: u32, target: u32| 0xea00_0000 | (target.wrapping_sub(at + 8) >> 2 & 0x00ff_ffff);
     // MOV r6, #40; TST r6, #1; MOVNE r1, r4; MOVEQ r1, r5; BX r1.
     case.ram.write_words(
         CODE,
-        &[0xe3a0_6028, 0xe316_0001, 0x11a0_1004, 0x01a0_1005, 0xe12f_ff11],
+        &[
+            0xe3a0_6028,
+            0xe316_0001,
+            0x11a0_1004,
+            0x01a0_1005,
+            0xe12f_ff11,
+        ],
     );
     // ADD r0, r0, #1 at one address and ADD r0, r0, #256 at the other, then a branch
     // to SUBS r6, r6, #1; BNE to the TST; BKPT.
-    case.ram.write_words(CODE + 0x200, &[0xe280_0001, branch(CODE + 0x204, CODE + 0x40)]);
-    case.ram.write_words(FAR + 0x200, &[0xe280_0c01, branch(FAR + 0x204, CODE + 0x40)]);
-    case.ram.write_words(CODE + 0x40, &[0xe256_6001, 0x1aff_ffee, 0xe120_0070]);
+    case.ram.write_words(
+        CODE + 0x200,
+        &[0xe280_0001, branch(CODE + 0x204, CODE + 0x40)],
+    );
+    case.ram.write_words(
+        FAR + 0x200,
+        &[0xe280_0c01, branch(FAR + 0x204, CODE + 0x40)],
+    );
+    case.ram
+        .write_words(CODE + 0x40, &[0xe256_6001, 0x1aff_ffee, 0xe120_0070]);
     case.cpu.regs[0] = 0;
     case.cpu.regs[4] = CODE + 0x200;
     case.cpu.regs[5] = FAR + 0x200;
     case.cpu.regs[15] = CODE;
     case.until = 1000;
-    let outcome = trio.run(&case).unwrap_or_else(|difference| panic!("{difference}"));
-    assert_eq!((outcome.regs[0], outcome.instructions), (20 * 0x101, 1 + 40 * 8));
+    let outcome = trio
+        .run(&case)
+        .unwrap_or_else(|difference| panic!("{difference}"));
+    assert_eq!(
+        (outcome.regs[0], outcome.instructions),
+        (20 * 0x101, 1 + 40 * 8)
+    );
     assert!(trio.compiled_share().is_none_or(|share| share > 0.9));
 }
 

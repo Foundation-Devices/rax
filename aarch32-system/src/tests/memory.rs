@@ -24,7 +24,8 @@ impl Model {
 
     fn store(&mut self, address: u32, size: u32, value: u32) {
         for index in 0..size {
-            self.ram[(address.wrapping_add(index) - RAM_BASE) as usize] = (value >> (8 * index)) as u8;
+            self.ram[(address.wrapping_add(index) - RAM_BASE) as usize] =
+                (value >> (8 * index)) as u8;
         }
     }
 
@@ -96,7 +97,11 @@ fn single(model: &mut Model, load: bool, kind: u32, rt: u32, rn: u32, offset: u3
 }
 
 fn signed_offset(u: u32, offset: u32) -> u32 {
-    if u == 1 { offset } else { offset.wrapping_neg() }
+    if u == 1 {
+        offset
+    } else {
+        offset.wrapping_neg()
+    }
 }
 
 /// P, U and W for an offset, an access before a writeback, and one after it.
@@ -108,21 +113,46 @@ fn index_mode(random: &mut Random) -> (u32, u32, u32) {
 fn single_register(random: &mut Random) -> Instruction {
     let [rt, rn, rm] = distinct(random, 13);
     let load = random.below(2);
-    let kind = if load == 1 { random.below(5) } else { random.below(3) };
+    let kind = if load == 1 {
+        random.below(5)
+    } else {
+        random.below(3)
+    };
     let (p, u, w) = index_mode(random);
     let imm = random.below(256);
     // The A32 and T32 fields of the sizes.
     let arm_half = [0, 0xb0, 0, 0xd0, 0xf0][kind as usize];
-    let thumb_size = [0xf800_0000u32, 0xf820_0000, 0xf840_0000, 0xf900_0000, 0xf920_0000][kind as usize];
+    let thumb_size = [
+        0xf800_0000u32,
+        0xf820_0000,
+        0xf840_0000,
+        0xf900_0000,
+        0xf920_0000,
+    ][kind as usize];
     let puw = p << 24 | u << 23 | w << 21;
     match random.below(4) {
         // An immediate offset.
         0 | 1 => {
             let arm = match kind {
                 0 | 2 => {
-                    0x0400_0000 | puw | u32::from(kind == 0) << 22 | load << 20 | rn << 16 | rt << 12 | imm
+                    0x0400_0000
+                        | puw
+                        | u32::from(kind == 0) << 22
+                        | load << 20
+                        | rn << 16
+                        | rt << 12
+                        | imm
                 }
-                _ => 0x0040_0000 | puw | load << 20 | rn << 16 | rt << 12 | (imm >> 4) << 8 | arm_half | imm & 15,
+                _ => {
+                    0x0040_0000
+                        | puw
+                        | load << 20
+                        | rn << 16
+                        | rt << 12
+                        | (imm >> 4) << 8
+                        | arm_half
+                        | imm & 15
+                }
             };
             // T32 has no negative offset with no writeback in this form but with 8 bits.
             let thumb = thumb_size
@@ -140,7 +170,7 @@ fn single_register(random: &mut Random) -> Instruction {
                 thumb,
                 base: rn,
                 index: None,
-            aligned: false,
+                aligned: false,
                 apply: Box::new(move |model| {
                     single(model, load == 1, kind, rt, rn, signed_offset(u, imm), p, w);
                 }),
@@ -154,10 +184,12 @@ fn single_register(random: &mut Random) -> Instruction {
             );
             Instruction {
                 arm,
-                thumb: Some(wide(thumb_size | 0x0080_0000 | load << 20 | rn << 16 | rt << 12 | imm)),
+                thumb: Some(wide(
+                    thumb_size | 0x0080_0000 | load << 20 | rn << 16 | rt << 12 | imm,
+                )),
                 base: rn,
                 index: None,
-            aligned: false,
+                aligned: false,
                 apply: Box::new(move |model| single(model, load == 1, kind, rt, rn, imm, 1, 0)),
             }
         }
@@ -204,7 +236,7 @@ fn single_register(random: &mut Random) -> Instruction {
                 thumb: None,
                 base: rn,
                 index: Some(rm),
-            aligned: false,
+                aligned: false,
                 apply: Box::new(move |model| {
                     let value = model.r[rm as usize];
                     let offset = match (kind, shift, amount) {
@@ -218,7 +250,16 @@ fn single_register(random: &mut Random) -> Instruction {
                         (_, _, 0) => value >> 1,
                         _ => value.rotate_right(amount),
                     };
-                    single(model, load == 1, kind, rt, rn, signed_offset(u, offset), p, w);
+                    single(
+                        model,
+                        load == 1,
+                        kind,
+                        rt,
+                        rn,
+                        signed_offset(u, offset),
+                        p,
+                        w,
+                    );
                 }),
             }
         }
@@ -235,7 +276,11 @@ fn pair(random: &mut Random) -> Instruction {
         }
     };
     // T32 takes each second register.
-    let rt2 = if other == rt || other == rn { rt + 1 } else { other };
+    let rt2 = if other == rt || other == rn {
+        rt + 1
+    } else {
+        other
+    };
     let load = random.below(2);
     let (p, u, w) = index_mode(random);
     let imm = random.below(64) * 4;
@@ -261,7 +306,15 @@ fn pair(random: &mut Random) -> Instruction {
         })
     };
     if random.below(2) == 0 {
-        let raw = 0xe840_0000 | p << 24 | u << 23 | (1 - p | w) << 21 | load << 20 | rn << 16 | rt << 12 | rt2 << 8 | imm / 4;
+        let raw = 0xe840_0000
+            | p << 24
+            | u << 23
+            | (1 - p | w) << 21
+            | load << 20
+            | rn << 16
+            | rt << 12
+            | rt2 << 8
+            | imm / 4;
         return Instruction {
             arm: None,
             thumb: Some(wide(raw)),
@@ -272,7 +325,15 @@ fn pair(random: &mut Random) -> Instruction {
         };
     }
     let imm = imm & 0xff;
-    let raw = 0x0040_00d0 | p << 24 | u << 23 | w << 21 | rn << 16 | rt << 12 | (imm >> 4) << 8 | (1 - load) << 5 | imm & 15;
+    let raw = 0x0040_00d0
+        | p << 24
+        | u << 23
+        | w << 21
+        | rn << 16
+        | rt << 12
+        | (imm >> 4) << 8
+        | (1 - load) << 5
+        | imm & 15;
     Instruction {
         arm: Some(raw),
         thumb: None,
@@ -285,7 +346,11 @@ fn pair(random: &mut Random) -> Instruction {
 
 /// LDM and STM in the four orders, PUSH and POP. The PC is in some lists of loads.
 fn multiple(random: &mut Random) -> Instruction {
-    let rn = if random.below(3) == 0 { 13 } else { random.below(13) };
+    let rn = if random.below(3) == 0 {
+        13
+    } else {
+        random.below(13)
+    };
     let load = random.below(2);
     let writeback = random.below(2);
     let mut mask = random.next() & 0x5fff;
@@ -338,10 +403,12 @@ fn multiple(random: &mut Random) -> Instruction {
             model.branch(target);
         }
     });
-    let arm = 0x0800_0000 | before << 24 | up << 23 | writeback << 21 | load << 20 | rn << 16 | mask;
+    let arm =
+        0x0800_0000 | before << 24 | up << 23 | writeback << 21 | load << 20 | rn << 16 | mask;
     // T32 has the increment after and the decrement before, and not LR with the PC.
-    let thumb = (up != before && mask & 0xc000 != 0xc000)
-        .then(|| wide(0xe800_0000 | before << 24 | up << 23 | writeback << 21 | load << 20 | rn << 16 | mask));
+    let thumb = (up != before && mask & 0xc000 != 0xc000).then(|| {
+        wide(0xe800_0000 | before << 24 | up << 23 | writeback << 21 | load << 20 | rn << 16 | mask)
+    });
     Instruction {
         arm: Some(arm),
         thumb,
@@ -387,8 +454,16 @@ fn narrow(random: &mut Random) -> Instruction {
         4 => {
             // STR, STRH, STRB, LDRSB, LDR, LDRH, LDRB, LDRSH with a register offset.
             let operation = random.below(8);
-            let (load, kind) = [(false, 2), (false, 1), (false, 0), (true, 3), (true, 2), (true, 1), (true, 0), (true, 4)]
-                [operation as usize];
+            let (load, kind) = [
+                (false, 2),
+                (false, 1),
+                (false, 0),
+                (true, 3),
+                (true, 2),
+                (true, 1),
+                (true, 0),
+                (true, 4),
+            ][operation as usize];
             (
                 0x5000 | operation << 9 | rm << 6 | rn << 3 | rt,
                 rn,
@@ -410,7 +485,11 @@ fn narrow(random: &mut Random) -> Instruction {
                     model.fault = true;
                     return;
                 }
-                let mut address = if load == 1 { sp } else { sp.wrapping_sub(4 * count) };
+                let mut address = if load == 1 {
+                    sp
+                } else {
+                    sp.wrapping_sub(4 * count)
+                };
                 let low = address;
                 for register in (0..8).chain([if load == 1 { 15 } else { 14 }]) {
                     if register < 8 && mask >> register & 1 == 0 {
@@ -431,7 +510,11 @@ fn narrow(random: &mut Random) -> Instruction {
         ),
         // STMIA with a writeback, and LDMIA: a writeback when the base is not in the list.
         _ => {
-            let mask = if load == 1 && random.below(2) == 0 { mask | 1 << rn } else { mask };
+            let mask = if load == 1 && random.below(2) == 0 {
+                mask | 1 << rn
+            } else {
+                mask
+            };
             (
                 0xc000 | load << 11 | rn << 8 | mask & 0xff,
                 rn,
@@ -478,7 +561,13 @@ fn with_pc(random: &mut Random) -> Instruction {
     let imm = random.below(64) * 4;
     let kind = random.below(5);
     let (size, signed) = width(kind);
-    let thumb_size = [0xf81f_0000u32, 0xf83f_0000, 0xf85f_0000, 0xf91f_0000, 0xf93f_0000][kind as usize];
+    let thumb_size = [
+        0xf81f_0000u32,
+        0xf83f_0000,
+        0xf85f_0000,
+        0xf91f_0000,
+        0xf93f_0000,
+    ][kind as usize];
     match random.below(4) {
         0 => Instruction {
             arm: Some(0x051f_0000 | up << 23 | rt << 12 | imm),
@@ -487,7 +576,9 @@ fn with_pc(random: &mut Random) -> Instruction {
             index: None,
             aligned: false,
             apply: Box::new(move |model| {
-                let address = model.r[15].wrapping_add(8).wrapping_add(signed_offset(up, imm));
+                let address = model.r[15]
+                    .wrapping_add(8)
+                    .wrapping_add(signed_offset(up, imm));
                 model.r[rt as usize] = model.load(address, 4);
             }),
         },
@@ -498,7 +589,8 @@ fn with_pc(random: &mut Random) -> Instruction {
             index: None,
             aligned: false,
             apply: Box::new(move |model| {
-                let address = (model.r[15].wrapping_add(4) & !3).wrapping_add(signed_offset(up, imm));
+                let address =
+                    (model.r[15].wrapping_add(4) & !3).wrapping_add(signed_offset(up, imm));
                 model.r[rt as usize] = extend(model.load(address, size), size, signed);
             }),
         },
@@ -509,7 +601,7 @@ fn with_pc(random: &mut Random) -> Instruction {
                 thumb: Some(t16(0x4800 | rt << 8 | imm / 4)),
                 base: rn,
                 index: None,
-            aligned: false,
+                aligned: false,
                 apply: Box::new(move |model| {
                     let address = (model.r[15].wrapping_add(4) & !3).wrapping_add(imm);
                     model.r[rt as usize] = model.load(address, 4);
@@ -528,10 +620,14 @@ fn with_pc(random: &mut Random) -> Instruction {
                 })),
                 base: rn,
                 index: None,
-            aligned: true,
+                aligned: true,
                 apply: Box::new(move |model| {
                     let base = model.r[rn as usize];
-                    let address = if post == 1 { base } else { base.wrapping_add(imm) };
+                    let address = if post == 1 {
+                        base
+                    } else {
+                        base.wrapping_add(imm)
+                    };
                     let target = model.load(address, 4);
                     if post == 1 {
                         model.r[rn as usize] = base.wrapping_add(imm);
@@ -575,7 +671,8 @@ fn check(trio: &mut Trio, random: &mut Random) -> Result<(), String> {
     }
     // Most addresses are multiples of 4.
     let aligned = instruction.aligned || random.below(8) != 0;
-    let base = DATA + 0x3000 + random.below(0x400) * 4 + if aligned { 0 } else { 1 + random.below(3) };
+    let base =
+        DATA + 0x3000 + random.below(0x400) * 4 + if aligned { 0 } else { 1 + random.below(3) };
     case.cpu.regs[instruction.base as usize] = base;
     if let Some(index) = instruction.index {
         case.cpu.regs[index as usize] = random.below(64);
@@ -607,7 +704,9 @@ fn check(trio: &mut Trio, random: &mut Random) -> Result<(), String> {
         Some(_) => (false, false),
         None => (
             false,
-            outcome.regs == model.r && (outcome.cpsr >> 5 & 1 != 0) == model.thumb && outcome.ram == model.ram,
+            outcome.regs == model.r
+                && (outcome.cpsr >> 5 & 1 != 0) == model.thumb
+                && outcome.ram == model.ram,
         ),
     };
     if stopped == model.fault && same {

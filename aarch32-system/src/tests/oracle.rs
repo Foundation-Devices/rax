@@ -70,12 +70,23 @@ fn add_with_carry(x: u32, y: u32, carry: bool) -> (u32, bool, bool) {
     let unsigned = u64::from(x) + u64::from(y) + u64::from(carry);
     let signed = i64::from(x as i32) + i64::from(y as i32) + i64::from(carry);
     let result = unsigned as u32;
-    (result, unsigned >> 32 != 0, i64::from(result as i32) != signed)
+    (
+        result,
+        unsigned >> 32 != 0,
+        i64::from(result as i32) != signed,
+    )
 }
 
 /// The data-processing operation with the A32 opcode, on `a` and the shifter operand
 /// `b` with its carry. Returns the result, when the instruction writes one.
-fn data_processing(state: &mut State, opcode: u32, set: bool, a: u32, b: u32, carry: bool) -> Option<u32> {
+fn data_processing(
+    state: &mut State,
+    opcode: u32,
+    set: bool,
+    a: u32,
+    b: u32,
+    carry: bool,
+) -> Option<u32> {
     let logical = |result: u32| (result, carry, state.v);
     let (result, c, v) = match opcode {
         0 | 8 => logical(a & b),
@@ -141,7 +152,11 @@ fn alu_immediate(random: &mut Random) -> Instruction {
             Some(raw),
             None,
             Box::new(move |state| {
-                let carry = if rotation == 0 { state.c } else { value >> 31 != 0 };
+                let carry = if rotation == 0 {
+                    state.c
+                } else {
+                    value >> 31 != 0
+                };
                 if let Some(result) = {
                     let first = state.r[rn as usize];
                     data_processing(state, opcode, set, first, value, carry)
@@ -182,9 +197,9 @@ fn alu_immediate(random: &mut Random) -> Instruction {
         Box::new(move |state| {
             let carry = if rotated { value >> 31 != 0 } else { state.c };
             if let Some(result) = {
-                    let first = state.r[rn as usize];
-                    data_processing(state, opcode, set, first, value, carry)
-                } {
+                let first = state.r[rn as usize];
+                data_processing(state, opcode, set, first, value, carry)
+            } {
                 state.r[rd as usize] = result;
             }
         }),
@@ -197,7 +212,10 @@ fn alu_shifted_register(random: &mut Random) -> Instruction {
     let opcode = random.below(17);
     let set = is_compare(opcode) || random.below(2) == 0;
     let s = u32::from(set);
-    let (kind, imm5) = (random.below(4), [0, 1, 31, random.below(32)][random.below(4) as usize]);
+    let (kind, imm5) = (
+        random.below(4),
+        [0, 1, 31, random.below(32)][random.below(4) as usize],
+    );
     let arm = (opcode < 16)
         .then(|| opcode << 21 | s << 20 | rn << 16 | rd << 12 | imm5 << 7 | kind << 5 | rm);
     let thumb = thumb_data_processing(opcode, rd, rn).map(|(thumb, td, tn)| {
@@ -218,9 +236,9 @@ fn alu_shifted_register(random: &mut Random) -> Instruction {
             let (kind, amount) = immediate_shift(kind, imm5);
             let (value, carry) = shift_c(state.r[rm as usize], kind, amount, state.c);
             if let Some(result) = {
-                    let first = state.r[rn as usize];
-                    data_processing(state, opcode, set, first, value, carry)
-                } {
+                let first = state.r[rn as usize];
+                data_processing(state, opcode, set, first, value, carry)
+            } {
                 state.r[rd as usize] = result;
             }
         }),
@@ -246,7 +264,8 @@ fn alu_register_shift(random: &mut Random) -> Instruction {
     }
     let opcode = random.below(16);
     let set = is_compare(opcode) || s == 1;
-    let raw = opcode << 21 | u32::from(set) << 20 | rn << 16 | rd << 12 | rs << 8 | kind << 5 | 0x10 | rm;
+    let raw =
+        opcode << 21 | u32::from(set) << 20 | rn << 16 | rd << 12 | rs << 8 | kind << 5 | 0x10 | rm;
     (
         Some(raw),
         None,
@@ -254,9 +273,9 @@ fn alu_register_shift(random: &mut Random) -> Instruction {
             let amount = state.r[rs as usize] & 0xff;
             let (value, carry) = shift_c(state.r[rm as usize], kind, amount, state.c);
             if let Some(result) = {
-                    let first = state.r[rn as usize];
-                    data_processing(state, opcode, set, first, value, carry)
-                } {
+                let first = state.r[rn as usize];
+                data_processing(state, opcode, set, first, value, carry)
+            } {
                 state.r[rd as usize] = result;
             }
         }),
@@ -280,7 +299,11 @@ fn move_wide(random: &mut Random) -> Instruction {
         ),
         Box::new(move |state| {
             let old = state.r[rd as usize];
-            state.r[rd as usize] = if top == 1 { old & 0xffff | imm16 << 16 } else { imm16 };
+            state.r[rd as usize] = if top == 1 {
+                old & 0xffff | imm16 << 16
+            } else {
+                imm16
+            };
         }),
     )
 }
@@ -317,7 +340,9 @@ fn multiply(random: &mut Random) -> Instruction {
             Some(0x0020_0000 | s << 20 | rd << 16 | ra << 12 | rm << 8 | 0x90 | rn),
             (s == 0).then_some(0xfb00_0000 | rn << 16 | ra << 12 | rd << 8 | rm),
             Box::new(move |state| {
-                let result = r(state, rn).wrapping_mul(r(state, rm)).wrapping_add(r(state, ra));
+                let result = r(state, rn)
+                    .wrapping_mul(r(state, rm))
+                    .wrapping_add(r(state, ra));
                 state.r[rd as usize] = result;
                 if s == 1 {
                     (state.n, state.z) = (result >> 31 != 0, result == 0);
@@ -359,7 +384,8 @@ fn multiply(random: &mut Random) -> Instruction {
             long_arm(0x00c0_0000),
             long_thumb(0xfb80_0000),
             Box::new(move |state| {
-                let result = (i64::from(r(state, rn) as i32) * i64::from(r(state, rm) as i32)) as u64;
+                let result =
+                    (i64::from(r(state, rn) as i32) * i64::from(r(state, rm) as i32)) as u64;
                 pair(state, result);
                 if s == 1 {
                     set_nz64(state, result);
@@ -370,7 +396,8 @@ fn multiply(random: &mut Random) -> Instruction {
             long_arm(0x00e0_0000),
             long_thumb(0xfbc0_0000),
             Box::new(move |state| {
-                let product = (i64::from(r(state, rn) as i32) * i64::from(r(state, rm) as i32)) as u64;
+                let product =
+                    (i64::from(r(state, rn) as i32) * i64::from(r(state, rm) as i32)) as u64;
                 let result = product.wrapping_add(accumulator(state));
                 pair(state, result);
                 if s == 1 {
@@ -569,8 +596,14 @@ fn saturating(random: &mut Random) -> Instruction {
                         state.q |= saturated;
                     }
                     let first = signed(state, rm);
-                    let (result, saturated) =
-                        signed_saturate(if subtract == 1 { first - second } else { first + second }, 32);
+                    let (result, saturated) = signed_saturate(
+                        if subtract == 1 {
+                            first - second
+                        } else {
+                            first + second
+                        },
+                        32,
+                    );
                     state.q |= saturated;
                     state.r[rd as usize] = result as u32;
                 }),
@@ -593,7 +626,15 @@ fn saturating(random: &mut Random) -> Instruction {
                     | sat,
             );
             (
-                Some(0x06a0_0010 | unsigned << 22 | sat << 16 | rd << 12 | imm5 << 7 | arithmetic << 6 | rn),
+                Some(
+                    0x06a0_0010
+                        | unsigned << 22
+                        | sat << 16
+                        | rd << 12
+                        | imm5 << 7
+                        | arithmetic << 6
+                        | rn,
+                ),
                 thumb,
                 Box::new(move |state| {
                     let value = state.r[rn as usize];
@@ -644,13 +685,40 @@ fn saturating(random: &mut Random) -> Instruction {
 fn parallel(random: &mut Random) -> Instruction {
     let [rd, rn, rm] = distinct(random);
     let (prefix, operation) = (random.below(6), random.below(6));
-    let arm_prefix = [0x0610_0000, 0x0620_0000, 0x0630_0000, 0x0650_0000, 0x0660_0000, 0x0670_0000];
+    let arm_prefix = [
+        0x0610_0000,
+        0x0620_0000,
+        0x0630_0000,
+        0x0650_0000,
+        0x0660_0000,
+        0x0670_0000,
+    ];
     let arm_operation = [0x10, 0x30, 0x50, 0x70, 0x90, 0xf0];
     let thumb_prefix = [0x00, 0x10, 0x20, 0x40, 0x50, 0x60];
-    let thumb_operation = [0xfa90_f000, 0xfaa0_f000, 0xfae0_f000, 0xfad0_f000, 0xfa80_f000, 0xfac0_f000];
+    let thumb_operation = [
+        0xfa90_f000,
+        0xfaa0_f000,
+        0xfae0_f000,
+        0xfad0_f000,
+        0xfa80_f000,
+        0xfac0_f000,
+    ];
     (
-        Some(arm_prefix[prefix as usize] | rn << 16 | rd << 12 | 0xf00 | arm_operation[operation as usize] | rm),
-        Some(thumb_operation[operation as usize] | rn << 16 | rd << 8 | thumb_prefix[prefix as usize] | rm),
+        Some(
+            arm_prefix[prefix as usize]
+                | rn << 16
+                | rd << 12
+                | 0xf00
+                | arm_operation[operation as usize]
+                | rm,
+        ),
+        Some(
+            thumb_operation[operation as usize]
+                | rn << 16
+                | rd << 8
+                | thumb_prefix[prefix as usize]
+                | rm,
+        ),
         Box::new(move |state| {
             let (n, m) = (state.r[rn as usize], state.r[rm as usize]);
             let unsigned = prefix >= 3;
@@ -772,8 +840,22 @@ fn bits_and_bytes(random: &mut Random) -> Instruction {
             // The extends, with an addition for the forms with Rn.
             let kind = random.below(6);
             let rn = if random.below(2) == 0 { 15 } else { rn };
-            let arm = [0x0680_0070, 0x06a0_0070, 0x06b0_0070, 0x06c0_0070, 0x06e0_0070, 0x06f0_0070];
-            let thumb = [0xfa20_f080, 0xfa40_f080, 0xfa00_f080, 0xfa30_f080, 0xfa50_f080, 0xfa10_f080];
+            let arm = [
+                0x0680_0070,
+                0x06a0_0070,
+                0x06b0_0070,
+                0x06c0_0070,
+                0x06e0_0070,
+                0x06f0_0070,
+            ];
+            let thumb = [
+                0xfa20_f080,
+                0xfa40_f080,
+                0xfa00_f080,
+                0xfa30_f080,
+                0xfa50_f080,
+                0xfa10_f080,
+            ];
             (
                 Some(arm[kind as usize] | rn << 16 | rd << 12 | rotation << 10 | rm),
                 Some(thumb[kind as usize] | rn << 16 | rd << 8 | rotation << 4 | rm),
@@ -783,14 +865,16 @@ fn bits_and_bytes(random: &mut Random) -> Instruction {
                     state.r[rd as usize] = match kind {
                         0 => {
                             let low = (base as u16).wrapping_add(rotated as i8 as u16);
-                            let high = ((base >> 16) as u16).wrapping_add((rotated >> 16) as i8 as u16);
+                            let high =
+                                ((base >> 16) as u16).wrapping_add((rotated >> 16) as i8 as u16);
                             u32::from(high) << 16 | u32::from(low)
                         }
                         1 => base.wrapping_add(rotated as i8 as u32),
                         2 => base.wrapping_add(rotated as i16 as u32),
                         3 => {
                             let low = (base as u16).wrapping_add(rotated as u8 as u16);
-                            let high = ((base >> 16) as u16).wrapping_add((rotated >> 16) as u8 as u16);
+                            let high =
+                                ((base >> 16) as u16).wrapping_add((rotated >> 16) as u8 as u16);
                             u32::from(high) << 16 | u32::from(low)
                         }
                         4 => base.wrapping_add(rotated & 0xff),
@@ -804,7 +888,11 @@ fn bits_and_bytes(random: &mut Random) -> Instruction {
             Some(0xfaa0_f080 | rn << 16 | rd << 8 | rm),
             Box::new(move |state| {
                 let mask = (0..4).fold(0, |mask, byte| {
-                    mask | if state.ge >> byte & 1 != 0 { 0xff << (byte * 8) } else { 0 }
+                    mask | if state.ge >> byte & 1 != 0 {
+                        0xff << (byte * 8)
+                    } else {
+                        0
+                    }
                 });
                 state.r[rd as usize] = r(state, rn) & mask | r(state, rm) & !mask;
             }),
@@ -818,7 +906,9 @@ fn bits_and_bytes(random: &mut Random) -> Instruction {
                 Some(0xfb70_0000 | rn << 16 | ra << 12 | rd << 8 | rm),
                 Box::new(move |state| {
                     let (n, m) = (r(state, rn).to_le_bytes(), r(state, rm).to_le_bytes());
-                    let sum: u32 = (0..4).map(|byte| u32::from(n[byte].abs_diff(m[byte]))).sum();
+                    let sum: u32 = (0..4)
+                        .map(|byte| u32::from(n[byte].abs_diff(m[byte])))
+                        .sum();
                     let base = if accumulate { r(state, ra) } else { 0 };
                     state.r[rd as usize] = base.wrapping_add(sum);
                 }),
@@ -868,7 +958,12 @@ const VALUES: [u32; 12] = [
     0xffff_ffff,
 ];
 
-fn check(trio: &mut Trio, random: &mut Random, name: &str, generate: fn(&mut Random) -> Instruction) -> Result<(), String> {
+fn check(
+    trio: &mut Trio,
+    random: &mut Random,
+    name: &str,
+    generate: fn(&mut Random) -> Instruction,
+) -> Result<(), String> {
     let (arm, thumb, apply) = generate(random);
     let (raw, is_thumb) = match (arm, thumb) {
         (Some(arm), Some(thumb)) if random.below(2) == 0 => {

@@ -9,9 +9,7 @@ use rax::arm::Armv7Cpu;
 use rax::arm::vfp::Fpscr;
 
 use super::Random;
-use super::machine::{
-    Counts, Engine, Kind, Machine, Outcome, RAM_BASE, RAM_PAGES, Ram, Stop,
-};
+use super::machine::{Counts, Engine, Kind, Machine, Outcome, RAM_BASE, RAM_PAGES, Ram, Stop};
 use crate::PAGE_SIZE;
 
 const PAGE: u32 = PAGE_SIZE as u32;
@@ -101,7 +99,10 @@ pub fn cases(
             panic!("{message}\n{again}");
         }
         let kind = message.split(" : ").next().unwrap().to_string();
-        failures.entry(kind).or_insert((0, format!("{message}\n{again}"))).0 += 1;
+        failures
+            .entry(kind)
+            .or_insert((0, format!("{message}\n{again}")))
+            .0 += 1;
     };
     if let Some(case_seed) = number("RAX_TEST_CASE") {
         run(case_seed, 0, 0);
@@ -148,7 +149,12 @@ pub struct Program {
 
 impl Program {
     pub fn end(&self) -> u32 {
-        self.at + self.insns.iter().map(|insn| u32::from(insn.size)).sum::<u32>()
+        self.at
+            + self
+                .insns
+                .iter()
+                .map(|insn| u32::from(insn.size))
+                .sum::<u32>()
     }
 
     pub fn bytes(&self) -> Vec<u8> {
@@ -387,8 +393,16 @@ pub fn random_cpu(random: &mut Random) -> Armv7Cpu {
         *register = match random.below(16) {
             0..=6 => random_pointer(random),
             7..=9 => random.below(64),
-            10 => [0, 1, 0x7fff_ffff, 0x8000_0000, u32::MAX, 0xffff, 0x8000, 0xff]
-                [random.below(8) as usize],
+            10 => [
+                0,
+                1,
+                0x7fff_ffff,
+                0x8000_0000,
+                u32::MAX,
+                0xffff,
+                0x8000,
+                0xff,
+            ][random.below(8) as usize],
             _ => random.next(),
         };
     }

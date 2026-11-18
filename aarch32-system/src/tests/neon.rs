@@ -86,7 +86,14 @@ fn saturate(value: i128, bits: u32, unsigned: bool) -> (i128, bool) {
 
 /// VSHL, VQSHL, VRSHL and VQRSHL of one element: a shift to the left by the signed low
 /// byte of `by`, to the right when it is negative.
-fn shift(value: i128, by: i128, bits: u32, unsigned: bool, round: bool, saturating: bool) -> (i128, bool) {
+fn shift(
+    value: i128,
+    by: i128,
+    bits: u32,
+    unsigned: bool,
+    round: bool,
+    saturating: bool,
+) -> (i128, bool) {
     let by = i128::from(by as i8);
     if by < 0 {
         let right = (-by) as u32;
@@ -103,7 +110,11 @@ fn shift(value: i128, by: i128, bits: u32, unsigned: bool, round: bool, saturati
         return (if left >= bits { 0 } else { value << left }, false);
     }
     if left >= bits {
-        return saturate(if value == 0 { 0 } else { value.signum() << 100 }, bits, unsigned);
+        return saturate(
+            if value == 0 { 0 } else { value.signum() << 100 },
+            bits,
+            unsigned,
+        );
     }
     saturate(value << left, bits, unsigned)
 }
@@ -198,7 +209,11 @@ impl Operation {
 
 /// The elements of `count` elements of `bits` bits of a vector, with their sign or not.
 fn elements(vector: u128, bits: u32, count: u32, unsigned: bool) -> Vec<i128> {
-    let mask = if bits == 128 { u128::MAX } else { (1u128 << bits) - 1 };
+    let mask = if bits == 128 {
+        u128::MAX
+    } else {
+        (1u128 << bits) - 1
+    };
     (0..count)
         .map(|index| {
             let raw = vector >> (index * bits) & mask;
@@ -216,7 +231,9 @@ fn vector_of(values: &[i128], bits: u32) -> u128 {
     values
         .iter()
         .enumerate()
-        .fold(0, |vector, (index, &value)| vector | (value as u128 & mask) << (index as u32 * bits))
+        .fold(0, |vector, (index, &value)| {
+            vector | (value as u128 & mask) << (index as u32 * bits)
+        })
 }
 
 fn field(number: usize, high: u32, low: u32) -> u32 {
@@ -245,7 +262,8 @@ fn three_registers(random: &mut Random) -> Instruction {
         Kind::Qdmulh | Kind::Qrdmulh => 1 + random.below(2),
         _ => random.below(sizes + 1),
     };
-    let register = |random: &mut Random| (random.below(32) & if is_quad { !1 } else { !0 }) as usize;
+    let register =
+        |random: &mut Random| (random.below(32) & if is_quad { !1 } else { !0 }) as usize;
     let operation = Operation {
         kind,
         // The operations with U in the opcode are the same with and with no sign,
@@ -267,11 +285,18 @@ fn three_registers(random: &mut Random) -> Instruction {
         | field(operation.n, 16, 7)
         | field(operation.m, 0, 5);
     (
-        format!("{kind:?} unsigned {} size {size} quad {is_quad}", operation.unsigned),
+        format!(
+            "{kind:?} unsigned {} size {size} quad {is_quad}",
+            operation.unsigned
+        ),
         arm,
         Box::new(move |d| {
             let vector = |d: &[u64; 32], number: usize| {
-                if is_quad { quad(d, number) } else { d[number].into() }
+                if is_quad {
+                    quad(d, number)
+                } else {
+                    d[number].into()
+                }
             };
             let (result, saturated) = operation.apply(
                 vector(d, operation.d),
@@ -335,15 +360,27 @@ fn shift_immediate(random: &mut Random) -> Instruction {
         Shift::Shrn | Shift::Rshrn | Shift::Qshrun | Shift::Qrshrun | Shift::Qshrn | Shift::Qrshrn
     );
     let long = kind == Shift::Shll;
-    let left = matches!(kind, Shift::Shl | Shift::Sli | Shift::Qshlu | Shift::Qshl | Shift::Shll);
+    let left = matches!(
+        kind,
+        Shift::Shl | Shift::Sli | Shift::Qshlu | Shift::Qshl | Shift::Shll
+    );
     // The size of the smaller element. The operations with two lengths have none of 64.
     let bits = 8 << random.below(if narrow || long { 3 } else { 4 });
-    let amount = if left { random.below(bits) } else { 1 + random.below(bits) };
+    let amount = if left {
+        random.below(bits)
+    } else {
+        1 + random.below(bits)
+    };
     // L:imm6 has the size as its top set bit, and the amount below it.
-    let l_imm6 = if left { bits + amount } else { 2 * bits - amount };
+    let l_imm6 = if left {
+        bits + amount
+    } else {
+        2 * bits - amount
+    };
     let is_quad = fixed_bit6.is_none() && random.below(2) == 0;
     let bit6 = fixed_bit6.unwrap_or(u32::from(is_quad));
-    let register = |random: &mut Random, even: bool| (random.below(32) & if even { !1 } else { !0 }) as usize;
+    let register =
+        |random: &mut Random, even: bool| (random.below(32) & if even { !1 } else { !0 }) as usize;
     let d = register(random, is_quad || long);
     let m = register(random, is_quad || narrow);
     let arm = 0xf280_0010
@@ -367,8 +404,16 @@ fn shift_immediate(random: &mut Random) -> Instruction {
                 (false, true) => (bits, 128 / bits),
                 (false, false) => (bits, 64 / bits),
             };
-            let source = if narrow || is_quad { quad(regs, m) } else { regs[m].into() };
-            let old = if long || is_quad { quad(regs, d) } else { regs[d].into() };
+            let source = if narrow || is_quad {
+                quad(regs, m)
+            } else {
+                regs[m].into()
+            };
+            let old = if long || is_quad {
+                quad(regs, d)
+            } else {
+                regs[d].into()
+            };
             let result_bits = if long { 2 * bits } else { bits };
             let values = elements(source, source_bits, count, unsigned);
             let old_values = elements(old, result_bits, count, true);
@@ -461,15 +506,29 @@ fn two_lengths(random: &mut Random) -> Instruction {
     let (kind, opcode, fixed_u) = LONGS[random.below(16) as usize];
     let u = fixed_u.unwrap_or_else(|| random.below(2));
     let doubling = matches!(kind, Long::Qdmlal | Long::Qdmlsl | Long::Qdmull);
-    let size = if doubling { 1 + random.below(2) } else { random.below(3) };
+    let size = if doubling {
+        1 + random.below(2)
+    } else {
+        random.below(3)
+    };
     let bits = 8 << size;
-    let narrow = matches!(kind, Long::Addhn | Long::Raddhn | Long::Subhn | Long::Rsubhn);
+    let narrow = matches!(
+        kind,
+        Long::Addhn | Long::Raddhn | Long::Subhn | Long::Rsubhn
+    );
     let wide_n = narrow || matches!(kind, Long::Addw | Long::Subw);
-    let register = |random: &mut Random, even: bool| (random.below(32) & if even { !1 } else { !0 }) as usize;
+    let register =
+        |random: &mut Random, even: bool| (random.below(32) & if even { !1 } else { !0 }) as usize;
     let d = register(random, !narrow);
     let n = register(random, wide_n);
     let m = register(random, narrow);
-    let arm = 0xf280_0000 | u << 24 | size << 20 | opcode << 8 | field(d, 12, 22) | field(n, 16, 7) | field(m, 0, 5);
+    let arm = 0xf280_0000
+        | u << 24
+        | size << 20
+        | opcode << 8
+        | field(d, 12, 22)
+        | field(n, 16, 7)
+        | field(m, 0, 5);
     let unsigned = !doubling && u == 1;
     (
         format!("{kind:?} unsigned {unsigned} size {size}"),
@@ -484,7 +543,11 @@ fn two_lengths(random: &mut Random) -> Instruction {
                 }
             };
             let (a, b) = (operand(regs, n, wide_n), operand(regs, m, narrow));
-            let old = if narrow { vec![0; count as usize] } else { operand(regs, d, true) };
+            let old = if narrow {
+                vec![0; count as usize]
+            } else {
+                operand(regs, d, true)
+            };
             let mut saturated = false;
             let rounding = 1i128 << (bits - 1);
             let results: Vec<i128> = (0..count as usize)
@@ -543,12 +606,25 @@ fn check(trio: &mut Trio, random: &mut Random) -> Result<(), String> {
         // Elements at the limits of each size, small ones, and random ones.
         *register = match random.below(4) {
             0 => {
-                let limits = [0u64, 1, 0x7f, 0x80, 0xff, 0x7fff, 0x8000, 0xffff, 0x7fff_ffff, 0x8000_0000];
+                let limits = [
+                    0u64,
+                    1,
+                    0x7f,
+                    0x80,
+                    0xff,
+                    0x7fff,
+                    0x8000,
+                    0xffff,
+                    0x7fff_ffff,
+                    0x8000_0000,
+                ];
                 (0..8).fold(0, |value, _| {
                     value << 8 << random.below(4) * 8 | limits[random.below(10) as usize]
                 })
             }
-            1 => (0..8).fold(0, |value, _| value << 8 | u64::from(random.below(67).wrapping_sub(33) as u8)),
+            1 => (0..8).fold(0, |value, _| {
+                value << 8 | u64::from(random.below(67).wrapping_sub(33) as u8)
+            }),
             _ => u64::from(random.next()) << 32 | u64::from(random.next()),
         };
     }
@@ -559,7 +635,14 @@ fn check(trio: &mut Trio, random: &mut Random) -> Result<(), String> {
     let program = Program {
         thumb,
         at,
-        insns: vec![wide(raw), if thumb { t16(0xe7fc) } else { wide(0xeaff_fffd) }],
+        insns: vec![
+            wide(raw),
+            if thumb {
+                t16(0xe7fc)
+            } else {
+                wide(0xeaff_fffd)
+            },
+        ],
     };
     case.load(&program);
     case.enter(&program);
@@ -577,7 +660,12 @@ fn check(trio: &mut Trio, random: &mut Random) -> Result<(), String> {
     }
     let different: Vec<_> = (0..32)
         .filter(|&index| outcome.dregs[index] != d[index])
-        .map(|index| format!("d{index}: {:016x}, the model {:016x}", outcome.dregs[index], d[index]))
+        .map(|index| {
+            format!(
+                "d{index}: {:016x}, the model {:016x}",
+                outcome.dregs[index], d[index]
+            )
+        })
         .collect();
     Err(format!(
         "{name} : {} {raw:08x} from fpscr {:#x} dregs {:x?}\n  the engines: fpscr {:#x} {:?}, the model: fpscr {fpscr:#x}\n  {different:?}",

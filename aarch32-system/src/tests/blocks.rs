@@ -66,33 +66,38 @@ pub fn random_arm(random: &mut Random, at: u32, length: u32) -> Program {
 #[test]
 fn random_blocks_run_the_same_with_each_engine() {
     let mut trio = Trio::new();
-    cases("random_blocks_run_the_same_with_each_engine", 0x51ed_270b_0f3a_9a11, 150_000, |random| {
-        let thumb = random.below(4) != 0;
-        let mut case = Case::new(random, thumb);
-        let length = 1 + random.below(6);
-        // Some programs end at the last bytes of a page, some go across the page end.
-        let at = CODE
-            + match random.below(8) {
-                0 => 0x1000 - 2 * random.below(12),
-                1 => 0x1000 - 4 * random.below(6),
-                _ => random.below(64) * 4,
+    cases(
+        "random_blocks_run_the_same_with_each_engine",
+        0x51ed_270b_0f3a_9a11,
+        150_000,
+        |random| {
+            let thumb = random.below(4) != 0;
+            let mut case = Case::new(random, thumb);
+            let length = 1 + random.below(6);
+            // Some programs end at the last bytes of a page, some go across the page end.
+            let at = CODE
+                + match random.below(8) {
+                    0 => 0x1000 - 2 * random.below(12),
+                    1 => 0x1000 - 4 * random.below(6),
+                    _ => random.below(64) * 4,
+                };
+            let program = if thumb {
+                random_thumb(random, at, length)
+            } else {
+                random_arm(random, at & !3, length)
             };
-        let program = if thumb {
-            random_thumb(random, at, length)
-        } else {
-            random_arm(random, at & !3, length)
-        };
-        case.cpu = random_cpu(random);
-        case.load(&program);
-        case.enter(&program);
-        case.periods = random_periods(random);
-        case.until = 1 + u64::from(random.below(24));
-        if random.below(8) == 0 {
-            // A program that goes across the page end gets a prefetch abort there.
-            case.ram.kinds[ram_page(CODE + 0x1000)] = Kind::Fault;
-        }
-        trio.run(&case).map(|_| ())
-    });
+            case.cpu = random_cpu(random);
+            case.load(&program);
+            case.enter(&program);
+            case.periods = random_periods(random);
+            case.until = 1 + u64::from(random.below(24));
+            if random.below(8) == 0 {
+                // A program that goes across the page end gets a prefetch abort there.
+                case.ram.kinds[ram_page(CODE + 0x1000)] = Kind::Fault;
+            }
+            trio.run(&case).map(|_| ())
+        },
+    );
 }
 
 /// One instruction with random bits, then a branch back to it. The second run of the
@@ -146,5 +151,8 @@ fn fast_operations_of_random_encodings_run_as_the_executor() {
             trio.run(&case).map(|_| ())
         },
     );
-    assert!(std::env::var_os("RAX_TEST_CASE").is_some() || fast > 50_000, "{fast}");
+    assert!(
+        std::env::var_os("RAX_TEST_CASE").is_some() || fast > 50_000,
+        "{fast}"
+    );
 }

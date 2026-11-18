@@ -72,7 +72,12 @@ impl Builder {
     }
 
     pub fn here(&self) -> u32 {
-        self.at + self.insns.iter().map(|insn| u32::from(insn.size)).sum::<u32>()
+        self.at
+            + self
+                .insns
+                .iter()
+                .map(|insn| u32::from(insn.size))
+                .sum::<u32>()
     }
 
     fn address(&self, index: usize) -> u32 {
@@ -125,9 +130,7 @@ impl Builder {
         let pc = self.here() + if self.thumb { 4 } else { 8 };
         let raw = match (self.thumb, target_thumb) {
             (true, true) => thumb_branch32(0xf000_d000, target.wrapping_sub(pc) as i32),
-            (true, false) => {
-                thumb_branch32(0xf000_c000, target.wrapping_sub(pc & !3) as i32) & !1
-            }
+            (true, false) => thumb_branch32(0xf000_c000, target.wrapping_sub(pc & !3) as i32) & !1,
             (false, false) => 0xeb00_0000 | (target.wrapping_sub(pc) >> 2 & 0x00ff_ffff),
             (false, true) => {
                 let offset = target.wrapping_sub(pc);
@@ -446,7 +449,11 @@ fn float(b: &mut Builder, random: &mut Random, cond: u32) {
         ),
         9 => both(
             b,
-            0xee00_0a10 | random.below(2) << 20 | (n >> 1) << 16 | (n & 1) << 7 | random.below(4) << 12,
+            0xee00_0a10
+                | random.below(2) << 20
+                | (n >> 1) << 16
+                | (n & 1) << 7
+                | random.below(4) << 12,
         ),
         // Conversions between an integer in a single-precision register and a number.
         10 => both(
@@ -486,7 +493,18 @@ fn memory(b: &mut Builder, random: &mut Random, cond: u32) {
             let offset = random.below(9) * 4;
             // A store of the base with a writeback has no defined value.
             let rt = if rt == WALK { 0 } else { rt };
-            single(b, cond, load, width, rt, WALK, offset, pre, random.below(2), 1);
+            single(
+                b,
+                cond,
+                load,
+                width,
+                rt,
+                WALK,
+                offset,
+                pre,
+                random.below(2),
+                1,
+            );
         }
         5 | 6 => {
             // A register offset: the counter of the loop, with a shift in the forms
@@ -494,8 +512,13 @@ fn memory(b: &mut Builder, random: &mut Random, cond: u32) {
             let shift = random.below(4);
             let base = pick(random, &[BASE, ODD, CALL]);
             let width = if load == 0 { width.min(2) } else { width };
-            let thumb = [0xf800_0000u32, 0xf820_0000, 0xf840_0000, 0xf900_0000, 0xf920_0000]
-                [width as usize];
+            let thumb = [
+                0xf800_0000u32,
+                0xf820_0000,
+                0xf840_0000,
+                0xf900_0000,
+                0xf920_0000,
+            ][width as usize];
             let arm = match width {
                 0 | 2 => 0x0780_0000 | u32::from(width == 0) << 22 | shift << 7,
                 _ => 0x0180_0090 | [0, 0x20, 0, 0x40, 0x60][width as usize],
@@ -521,17 +544,29 @@ fn memory(b: &mut Builder, random: &mut Random, cond: u32) {
         7 | 8 => {
             // PUSH and POP of results. A32 PUSH with one register is not a multiple.
             let mask = 1 + random.below(15) | random.below(2) << 12;
-            let mask = if mask.count_ones() < 2 { mask | 0x1001 } else { mask };
+            let mask = if mask.count_ones() < 2 {
+                mask | 0x1001
+            } else {
+                mask
+            };
             if load == 1 {
                 b.w(cond, 0x08bd_0000 | mask, 0xe8bd_0000 | mask);
             } else {
-                b.w(cond, 0x092d_0000 | mask | 0x4000, 0xe92d_0000 | mask | 0x4000);
+                b.w(
+                    cond,
+                    0x092d_0000 | mask | 0x4000,
+                    0xe92d_0000 | mask | 0x4000,
+                );
             }
         }
         9 | 10 => {
             // LDMIA and STMIA with the pointer that moves, and with the one that stays.
             let mask = 1 + random.below(15) | random.below(2) << 12 | 1;
-            let mask = if mask.count_ones() < 2 { mask | 0x1000 } else { mask };
+            let mask = if mask.count_ones() < 2 {
+                mask | 0x1000
+            } else {
+                mask
+            };
             let (base, writeback) = if random.below(3) == 0 {
                 (BASE, 0)
             } else {
@@ -548,7 +583,12 @@ fn memory(b: &mut Builder, random: &mut Random, cond: u32) {
             let rt = random.below(2) * 2;
             b.w(
                 cond,
-                0x01c0_00d0 | (1 - load) << 5 | BASE << 16 | rt << 12 | (imm & 0xf0) << 4 | imm & 0xc,
+                0x01c0_00d0
+                    | (1 - load) << 5
+                    | BASE << 16
+                    | rt << 12
+                    | (imm & 0xf0) << 4
+                    | imm & 0xc,
                 0xe9c0_0000 | load << 20 | BASE << 16 | rt << 12 | (rt + 1) << 8 | imm,
             );
         }
@@ -602,19 +642,45 @@ fn single(
     let puw = p << 24 | u << 23 | (p & w) << 21;
     let arm = match width {
         0 | 2 => {
-            0x0400_0000 | puw | u32::from(width == 0) << 22 | load << 20 | base << 16 | rt << 12 | offset
+            0x0400_0000
+                | puw
+                | u32::from(width == 0) << 22
+                | load << 20
+                | base << 16
+                | rt << 12
+                | offset
         }
         _ => {
             let offset = offset & 0xff;
             let kind = [0, 0xb0, 0, 0xd0, 0xf0][width as usize];
-            0x0040_0000 | puw | load << 20 | base << 16 | rt << 12 | (offset >> 4) << 8 | kind | offset & 0xf
+            0x0040_0000
+                | puw
+                | load << 20
+                | base << 16
+                | rt << 12
+                | (offset >> 4) << 8
+                | kind
+                | offset & 0xf
         }
     };
-    let kind = [0xf800_0000u32, 0xf820_0000, 0xf840_0000, 0xf900_0000, 0xf920_0000][width as usize];
+    let kind = [
+        0xf800_0000u32,
+        0xf820_0000,
+        0xf840_0000,
+        0xf900_0000,
+        0xf920_0000,
+    ][width as usize];
     let thumb = if p == 1 && u == 1 && w == 0 {
         kind | 0x0080_0000 | load << 20 | base << 16 | rt << 12 | offset & 0xfff
     } else {
-        kind | load << 20 | base << 16 | rt << 12 | 0x800 | p << 10 | u << 9 | w << 8 | offset & 0xff
+        kind | load << 20
+            | base << 16
+            | rt << 12
+            | 0x800
+            | p << 10
+            | u << 9
+            | w << 8
+            | offset & 0xff
     };
     b.w(cond, arm, thumb);
 }
@@ -717,7 +783,8 @@ const HANDLER_STACKS: u32 = RAM_BASE + 0x2000;
 /// one), and to the instruction that an interrupt request came before. A prefetch
 /// abort stops the machine. `log` is the address of the log.
 pub fn install_vectors(case: &mut Case, log: u32) {
-    let word = |at: u32, target: u32| 0xea00_0000 | (target.wrapping_sub(at + 8) >> 2 & 0x00ff_ffff);
+    let word =
+        |at: u32, target: u32| 0xea00_0000 | (target.wrapping_sub(at + 8) >> 2 & 0x00ff_ffff);
     let (undefined, svc, prefetch, data, irq) = (0x40, 0x48, 0x80, 0xa0, 0xe0);
     let stop = [0xe320_f003, 0xeaff_fffe];
     let ram = &mut case.ram;
@@ -731,7 +798,10 @@ pub fn install_vectors(case: &mut Case, log: u32) {
         (0x18, irq),
         (0x1c, prefetch),
     ] {
-        ram.write_words(VECTORS + vector, &[word(VECTORS + vector, VECTORS + target)]);
+        ram.write_words(
+            VECTORS + vector,
+            &[word(VECTORS + vector, VECTORS + target)],
+        );
     }
     // The literal with the address of the log is at 0x200.
     let literal = |at: u32| 0xe59f_0000 | (0x200 - (at + 8));
@@ -928,9 +998,7 @@ fn part(b: &mut Builder, random: &mut Random, options: &Options) {
             let byte = random.below(2);
             let rt = if byte == 1 { COUNTER } else { PATCH };
             if b.thumb {
-                b.emit(wide(
-                    0xf8a0_0000 & !(byte << 21) | SITE << 16 | rt << 12,
-                ));
+                b.emit(wide(0xf8a0_0000 & !(byte << 21) | SITE << 16 | rt << 12));
             } else {
                 b.emit(wide(0xe580_0000 | byte << 22 | SITE << 16 | rt << 12));
             }
@@ -983,7 +1051,12 @@ pub fn subroutine(random: &mut Random, thumb: bool, at: u32) -> Program {
 }
 
 /// A program of straight parts and loops, with a stop at its end.
-pub fn main_program(random: &mut Random, thumb: bool, at: u32, options: &Options) -> (Program, Option<u32>) {
+pub fn main_program(
+    random: &mut Random,
+    thumb: bool,
+    at: u32,
+    options: &Options,
+) -> (Program, Option<u32>) {
     let mut b = Builder::new(thumb, at);
     for _ in 0..1 + random.below(4) {
         for _ in 0..random.below(5) {
@@ -991,7 +1064,11 @@ pub fn main_program(random: &mut Random, thumb: bool, at: u32, options: &Options
         }
         // A loop: the counter goes down to 0.
         let count = 1 + random.below(14);
-        b.w(AL, 0x03a0_0000 | COUNTER << 12 | count, 0xf04f_0000 | COUNTER << 8 | count);
+        b.w(
+            AL,
+            0x03a0_0000 | COUNTER << 12 | count,
+            0xf04f_0000 | COUNTER << 8 | count,
+        );
         let top = b.label();
         b.bind(top);
         for _ in 0..1 + random.below(7) {
