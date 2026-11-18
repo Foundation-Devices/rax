@@ -72,7 +72,11 @@ controls of the compilation. For each other case it leaves before the instructio
 registers as before it. On x86-64 the VFP arithmetic is that of SSE, and the code leaves
 before the instruction after a result that is not sure to be the result of the guest with
 its flags: a NaN, an infinity, a denormal number or one with the smallest exponent, an
-invalid operation, an underflow, a conversion out of the range of 32 bits. Of the Advanced
+invalid operation, an underflow, a conversion out of the range of 32 bits. It finds them
+from the result and the operands, with no read of the MXCSR. At such an exit the MXCSR
+keeps the exceptions of the instruction, so the cumulative flags of the FPSCR can have
+its division by zero, overflow or inexact result before the interpreter runs it and sets
+the same flags. Of the Advanced
 SIMD operations on elements, x86-64 has code (SSE2) only for VADD, VSUB, VCEQ, VCGT, VCLT
 with 0, VSHR, VMUL, VMLA and VMLS of 16-bit elements, and the compares of FP numbers; the interpreter runs the others and VLD3/VLD4/VST3/VST4. The start of a block subtracts its length from the budget, and
 each exit in the block adds back the instructions that did not run.
@@ -90,8 +94,8 @@ All the commands are for the directory of rax. The tests are in `src/tests.rs`,
 
 ### Quick tier
 
-`cargo test --release -p rax-aarch32-system`: 41 tests in about 30 s on an Apple
-M-series host (110 s of CPU time); 40 on an x86-64 host, where `tests/fp.rs` has no model. `--no-default-features` runs the same tests with no
+`cargo test --release -p rax-aarch32-system`: 42 tests in about 30 s on an Apple
+M-series host (110 s of CPU time); 41 on an x86-64 host, where `tests/fp.rs` has no model. `--no-default-features` runs the same tests with no
 compiler, as on another host. The dev profile passes too (its overflow checks see what
 a release build does not): there `RAX_SOAK_SECONDS=40` gives each random test a time
 that its count of cases does not.
