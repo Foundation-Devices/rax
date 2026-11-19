@@ -632,7 +632,14 @@ impl Machine {
             afe: cp15.sctlr.afe(),
         });
         if mcr >> 8 & 0xf == 15 && mcr >> 16 & 0xf == 8 {
-            self.bus.tlb.flush();
+            // TLBIMVA and TLBIMVAA name one page; the other operations name more.
+            match mcr >> 5 & 0x7 {
+                1 | 3 => self
+                    .bus
+                    .tlb
+                    .flush_page(self.cpu.regs[(mcr >> 12 & 0xf) as usize]),
+                _ => self.bus.tlb.flush(),
+            }
         }
     }
 

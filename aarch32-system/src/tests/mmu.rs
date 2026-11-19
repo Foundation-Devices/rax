@@ -1,12 +1,17 @@
 //! Programs that change the translation while they run: two address spaces with
 //! other code at the same address, a new entry of a translation table with a TLB
-//! flush, a second address of the same code, and pages with no write permission.
+//! flush or an invalidation of the page, a second address of the same code, and pages
+//! with no write permission.
+
+use std::collections::HashMap;
 
 use rax::arm::cp15::Sctlr;
+use rax::arm::mmu_v6::{V6Access, V6MmuConfig};
 
 use super::Random;
 use super::machine::RAM_BASE;
 use super::suite::{ARM_STOP, CODE, Case, DATA, Trio, cases, random_periods};
+use crate::tlb::{Page, PhysicalMemory, Tlb};
 
 const PAGE: u32 = 0x1000;
 /// The physical page of the code of the second address space.
@@ -46,7 +51,7 @@ fn image(random: &mut Random, slots: usize, user: bool) -> Vec<u32> {
     while words.len() < slots {
         let room = slots - words.len();
         let offset = random.below(64) * 4;
-        match random.below(if user { 8 } else { 14 }) {
+        match random.below(if user { 8 } else { 16 }) {
             0 | 1 => words.push(0xe280_0000 | random.below(256)),
             2 => words.push(0xe020_0060 | (1 + random.below(31)) << 7),
             3 => words.push(0xe580_0000 | POINTER << 16 | offset),
@@ -71,6 +76,12 @@ fn image(random: &mut Random, slots: usize, user: bool) -> Vec<u32> {
             10 | 11 if room >= 2 => {
                 words.push(0xe580_0000 | pick(random, ENTRIES) << 16 | pick(random, PAGES) << 12);
                 words.push(0xee08_0f17);
+            }
+            // The same with TLBIMVAA of an address in the code page, from the table.
+            13 | 14 if room >= 3 => {
+                words.push(0xe580_0000 | pick(random, ENTRIES) << 16 | pick(random, PAGES) << 12);
+                words.push(0xe590_1000 | CODE_TABLE << 16 | (words.len() as u32 * 4));
+                words.push(0xee08_1f77);
             }
             // DACR with domain 0 as a client, or as a manager with no permission check.
             12 if room >= 2 => {
@@ -175,4 +186,66 @@ fn programs_that_change_the_translation_run_the_same_with_each_engine() {
         trio.ends
     );
     assert!(trio.compiled_share().is_none_or(|share| share > 0.1));
+}
+
+struct Tables(HashMap<u32, u32>);
+
+impl PhysicalMemory for Tables {
+    fn table_word(&self, pa: u32) -> Option<u32> {
+        self.0.get(&pa).copied()
+    }
+
+    fn page(&self, _physical_page: u32, _access: V6Access) -> Page {
+        Page::Memory
+    }
+}
+
+#[test]
+fn an_invalidation_of_a_page_keeps_the_mapping_only_for_a_small_page_with_no_fetch() {
+    const SECTION: u32 = 0x4000_0000;
+    let (first, second) = (FIRST_LEVEL[0], SECOND_LEVEL[0]);
+    let entry = |va: u32| second + (va - RAM_BASE) / PAGE * 4;
+    let mut tables = Tables(HashMap::from([
+        (first + (RAM_BASE >> 20) * 4, second | 1),
+        // A section with all accesses.
+        (first + (SECTION >> 20) * 4, 0x8000_0c02),
+        (entry(CODE), CODE | SMALL_PAGE),
+        (entry(DATA), DATA | SMALL_PAGE),
+        (entry(GUARDED), GUARDED | SMALL_PAGE),
+    ]));
+    let mut tlb = Tlb::default();
+    tlb.set_mmu(V6MmuConfig {
+        enabled: true,
+        ttbr0: first,
+        dacr: 1,
+        ..V6MmuConfig::default()
+    });
+    let read =
+        |tlb: &Tlb, tables: &Tables, va| tlb.translate(tables, va, V6Access::Read, true).unwrap();
+    tlb.translate(&tables, CODE, V6Access::Execute, true)
+        .unwrap();
+    assert_eq!(read(&tlb, &tables, DATA + 4), DATA + 4);
+    assert_eq!(read(&tlb, &tables, GUARDED), GUARDED);
+    let mapping = tlb.mapping();
+
+    // The TLB keeps the old entry of a table until the invalidation of its page.
+    tables.0.insert(entry(DATA), ALIAS | SMALL_PAGE);
+    tables.0.insert(entry(GUARDED), ALIAS | SMALL_PAGE);
+    assert_eq!(read(&tlb, &tables, DATA + 4), DATA + 4);
+    tlb.flush_page(DATA + 8);
+    assert_eq!(read(&tlb, &tables, DATA + 4), ALIAS + 4);
+    assert_eq!(read(&tlb, &tables, GUARDED), GUARDED);
+    assert_eq!((tlb.mapping(), tlb.flushes), (mapping, 0));
+
+    tlb.flush_page(CODE);
+    assert_ne!(tlb.mapping(), mapping);
+    assert_eq!(read(&tlb, &tables, GUARDED), ALIAS);
+
+    // The entries of a section are for more pages than the one of the invalidation.
+    let mapping = tlb.mapping();
+    assert_eq!(read(&tlb, &tables, SECTION + 0x5000), 0x8000_5000);
+    tables.0.insert(first + (SECTION >> 20) * 4, 0x9000_0c02);
+    tlb.flush_page(SECTION + 0x9000);
+    assert_ne!(tlb.mapping(), mapping);
+    assert_eq!(read(&tlb, &tables, SECTION + 0x5000), 0x9000_5000);
 }

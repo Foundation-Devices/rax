@@ -41,8 +41,10 @@ its memory and its time to the engine through the interfaces below.
   in the same run: the block is old then, and the machine gets the block at the PC again.
 - Invalidation: `BlockCache::remove_pages` and `Jit::remove_page` after a write to a page
   with code; `Tlb::protect_code` when a page gets its first block (a write to it must not
-  be direct); `Tlb::set_mmu` and `Tlb::flush` for the CP15 writes. `Tlb::mapping` and
-  `BlockCache::removals` make the stamp of `Jit::jumps`.
+  be direct); `Tlb::set_mmu` for the CP15 writes, with `Tlb::flush_page` for an
+  invalidation of one page (TLBIMVA, TLBIMVAA) and `Tlb::flush` for the other TLB
+  operations. `Tlb::mapping` and `BlockCache::removals` make the stamp of `Jit::jumps`;
+  `Tlb::flush_page` keeps `Tlb::mapping` when the page is a small page with no fetch.
 - Memory limit: when `BlockCache::is_full` (it made `cache::MAX_BLOCKS` blocks), the
   machine calls `BlockCache::clear` and `Jit::flush` before it gets the next block. The
   code buffer of the compiler has 64 MiB and `Jit::code` flushes it when it is full.
@@ -94,8 +96,8 @@ All the commands are for the directory of rax. The tests are in `src/tests.rs`,
 
 ### Quick tier
 
-`cargo test --release -p rax-aarch32-system`: 42 tests in about 30 s on an Apple
-M-series host (110 s of CPU time); 41 on an x86-64 host, where `tests/fp.rs` has no model. `--no-default-features` runs the same tests with no
+`cargo test --release -p rax-aarch32-system`: 43 tests in about 30 s on an Apple
+M-series host (110 s of CPU time); 42 on an x86-64 host, where `tests/fp.rs` has no model. `--no-default-features` runs the same tests with no
 compiler, as on another host. The dev profile passes too (its overflow checks see what
 a release build does not): there `RAX_SOAK_SECONDS=40` gives each random test a time
 that its count of cases does not.
@@ -113,7 +115,7 @@ write moves the next event.
 | `tests.rs` | 1 million random blocks, fast interpreter and compiled code against the `Executor`; each operation ran in each engine. |
 | `tests/blocks.rs` | Short random programs, also across a page end, with pointers to each kind of page and events at random places. Instructions with random bits: each one with a fast operation runs as the `Executor`. |
 | `tests/engine.rs` | Programs with loops, calls to the other instruction set, IT blocks, table branches, literals, stores to their own instructions, exceptions with handlers, interrupt requests, CPS to each mode. An event at each place of the blocks, the compilation at the ninth run, two addresses with one place in the jump table, a full code buffer, a block cache that is full after five blocks. |
-| `tests/mmu.rs` | Two address spaces with other code at the same address, a new table entry with a TLB flush, a second address of the same code, DACR, a page with no write permission, User mode. |
+| `tests/mmu.rs` | Two address spaces with other code at the same address, a new table entry with a TLB flush or an invalidation of its page, a second address of the same code, DACR, a page with no write permission, User mode. |
 | `tests/oracle.rs` | Integer instructions (A32 and T32) against a model from the pseudocode of the architecture manual: data processing with each shift, multiplies, saturating and parallel arithmetic, bit fields, extends, divides. |
 | `tests/memory.rs` | Loads and stores against a model: each addressing mode with its writeback, LDRD and STRD, LDM and STM in the four orders, PUSH and POP, the 16-bit forms, loads from the PC, loads of the PC, the alignment rules. |
 | `tests/fp.rs` | VFP instructions against the FP unit of an AArch64 host: arithmetic, fused and not fused multiply-add, compares, conversions with integers and fixed-point numbers, with each rounding mode, flush to zero, default NaN, NaN and denormal operands, and the FPSCR flags. |

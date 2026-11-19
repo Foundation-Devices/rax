@@ -108,6 +108,12 @@ pub struct Tlb {
     next_context: usize,
     flush_count: u64,
     pub flushes: u64,
+    /// One bit for each virtual page: a fetch from the page got a translation after the
+    /// last change of `flush_count`. The users of `mapping` keep addresses of such pages only.
+    fetched: Box<[Cell<u64>]>,
+    /// One bit for each 16 MiB of virtual addresses: a translation of after the last change
+    /// of `flush_count` is from a section, a supersection or a large page.
+    wide: [Cell<u64>; 4],
     /// Translations with a walk of the translation tables.
     pub misses: Cell<u64>,
 }
@@ -126,6 +132,8 @@ impl Default for Tlb {
             next_context: 0,
             flush_count: 0,
             flushes: 0,
+            fetched: vec![Cell::new(0); 1 << (32 - 12 - 6)].into(),
+            wide: Default::default(),
             misses: Cell::new(0),
         }
     }
@@ -157,7 +165,7 @@ impl Tlb {
             self.contexts[self.context].mmu = mmu;
             // The entries are those of a different configuration. The new flush count
             // also ends the use of this context number by the users of `mapping`.
-            self.flush_count += 1;
+            self.new_flush_count();
         }
         let context = &mut self.contexts[self.context];
         if context.flush_count != self.flush_count {
@@ -166,13 +174,54 @@ impl Tlb {
         }
     }
 
+    fn new_flush_count(&mut self) {
+        self.flush_count += 1;
+        self.fetched.fill(Cell::new(0));
+        self.wide = Default::default();
+    }
+
     /// Removes the translations of all address spaces.
     pub fn flush(&mut self) {
         self.flushes += 1;
-        self.flush_count += 1;
+        self.new_flush_count();
         let context = &mut self.contexts[self.context];
         context.flush_count = self.flush_count;
         context.entries.fill(Cell::new(NO_ENTRY));
+    }
+
+    /// Removes the translations of the page of `va` in all address spaces.
+    ///
+    /// `mapping` stays when no fetch used the page: a guest that moves data pages between
+    /// its processes then keeps the translations and the links of its code.
+    pub fn flush_page(&mut self, va: u32) {
+        let page = va & !PAGE_MASK;
+        let (fetched, fetched_bit) = self.fetched_bit(page);
+        let (wide, wide_bit) = self.wide_bit(va);
+        // A wide mapping has entries for more pages than this one.
+        if fetched.get() & fetched_bit != 0 || wide.get() & wide_bit != 0 {
+            return self.flush();
+        }
+        for context in &mut self.contexts {
+            // The entries of an older flush count are not valid already.
+            if context.flush_count != self.flush_count {
+                continue;
+            }
+            for table in 0..TABLES {
+                let entry =
+                    context.entries[table * ENTRIES + (va >> 12) as usize % ENTRIES].get_mut();
+                if entry.page == page {
+                    *entry = NO_ENTRY;
+                }
+            }
+        }
+    }
+
+    fn fetched_bit(&self, page: u32) -> (&Cell<u64>, u64) {
+        (&self.fetched[(page >> 18) as usize], 1 << (page >> 12 & 63))
+    }
+
+    fn wide_bit(&self, va: u32) -> (&Cell<u64>, u64) {
+        (&self.wide[(va >> 30) as usize], 1 << (va >> 24 & 63))
     }
 
     /// The page at `place` holds decoded code: the next write to it must not be direct.
@@ -215,10 +264,29 @@ impl Tlb {
         }
         if entry.page != page {
             self.misses.set(self.misses.get() + 1);
+            if access == V6Access::Execute {
+                let (word, bit) = self.fetched_bit(page);
+                word.set(word.get() | bit);
+            }
             let pa = if self.mmu.enabled {
-                let walk = |pa: u32| memory.table_word(pa);
+                // The walk reads the descriptor of level 1, then the one of level 2.
+                let mut descriptors = [None; 2];
+                let mut level = 0;
+                let walk = |pa: u32| {
+                    let word = memory.table_word(pa);
+                    descriptors[level] = word;
+                    level += 1;
+                    word
+                };
                 match mmu_v6::translate_v6(&self.mmu, va, privileged, access, walk) {
-                    Ok(translation) => translation.pa,
+                    Ok(translation) => {
+                        let small_page = descriptors[1].is_some_and(|word| word & 0b10 != 0);
+                        if !small_page {
+                            let (word, bit) = self.wide_bit(va);
+                            word.set(word.get() | bit);
+                        }
+                        translation.pa
+                    }
                     Err(fault) => {
                         return Err(Fault {
                             status: fault.fsr | fault.domain << 4,
