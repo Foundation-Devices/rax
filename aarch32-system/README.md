@@ -149,8 +149,10 @@ instructions, UART text, pictures) and with QEMU.
 
 ## Limits
 
-- The compiler is for AArch64 macOS (MAP_JIT), AArch64 Linux and x86-64 Linux (the code
-  pages are writable only for the time of a write). Other hosts have the interpreter only.
+- The compiler is for AArch64 macOS (MAP_JIT), AArch64 Linux (the code pages are writable
+  only for the time of a write) and x86-64 Linux (the code pages are always writable; on
+  a host that refuses such pages, or with the environment variable `RAX_PROTECT_CODE`,
+  as AArch64 Linux). Other hosts have the interpreter only.
   Checked: `cargo zigbuild --tests` for the musl and gnu targets of AArch64 and x86-64
   Linux and for `x86_64-pc-windows-gnu`; a run of the two musl test binaries in a Linux
   AArch64 container. The Windows build was not run.

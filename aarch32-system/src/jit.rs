@@ -152,6 +152,8 @@ pub struct Stats {
     pub moved_blocks: u64,
     pub code_bytes: usize,
     pub flushes: u64,
+    /// The code pages always take writes: a write of code has no system call.
+    pub writable_code: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -493,8 +495,22 @@ impl Jit {
             libc::PROT_READ | libc::PROT_EXEC,
         );
         // SAFETY: a new mapping, not at a fixed address.
-        let memory =
-            unsafe { libc::mmap(std::ptr::null_mut(), CODE_SIZE, protection, flags, -1, 0) };
+        let map = |protection| unsafe {
+            libc::mmap(std::ptr::null_mut(), CODE_SIZE, protection, flags, -1, 0)
+        };
+        // An x86-64 host sees a write to code with no call, so the pages can stay writable.
+        // `write_code` has two system calls for each write, 10 % of the time of a KeyOS boot.
+        let mut writable_code = cfg!(all(target_os = "linux", target_arch = "x86_64"))
+            && std::env::var_os("RAX_PROTECT_CODE").is_none();
+        let mut memory = match writable_code {
+            true => map(protection | libc::PROT_WRITE),
+            false => map(protection),
+        };
+        if memory == libc::MAP_FAILED && writable_code {
+            // The host refuses pages that take writes and run code.
+            writable_code = false;
+            memory = map(protection);
+        }
         if memory == libc::MAP_FAILED {
             return None;
         }
@@ -510,11 +526,29 @@ impl Jit {
             generation: 0,
             tables: Vec::new(),
             pages: HashMap::new(),
-            stats: Stats::default(),
+            stats: Stats {
+                writable_code,
+                ..Stats::default()
+            },
         };
         jit.write(&code, &[]);
         jit.stubs_end = jit.used;
         Some(jit)
+    }
+
+    /// Writes code.
+    ///
+    /// # Safety
+    /// The range is in the mapping, and no code of the range runs now.
+    unsafe fn put(&self, start: *mut u8, code: &[u8]) {
+        // SAFETY: the range (caller).
+        unsafe {
+            if self.stats.writable_code {
+                std::ptr::copy_nonoverlapping(code.as_ptr(), start, code.len());
+            } else {
+                write_code(start, code);
+            }
+        }
     }
 
     /// Puts code at the next free place, and cold code before the cold code that is
@@ -523,10 +557,10 @@ impl Jit {
         assert!(self.used + code.len() + self.cold_used + cold.len() <= CODE_SIZE);
         // SAFETY: the ranges are in the mapping and no code of them runs now.
         unsafe {
-            write_code(self.memory.add(self.used), code);
+            self.put(self.memory.add(self.used), code);
             if !cold.is_empty() {
                 let start = CODE_SIZE - self.cold_used - cold.len();
-                write_code(self.memory.add(start), cold);
+                self.put(self.memory.add(start), cold);
             }
         }
         self.used += code.len();
@@ -554,7 +588,7 @@ impl Jit {
     fn link(&mut self, site: usize, target: usize) {
         let (address, branch) = host::link(site, target);
         // SAFETY: the site is a branch in code of this mapping that does not run now.
-        unsafe { write_code(address as *mut u8, &branch) };
+        unsafe { self.put(address as *mut u8, &branch) };
     }
 
     /// The code of the block at the virtual page `page`, or None when the block has none
