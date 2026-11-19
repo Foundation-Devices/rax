@@ -4,7 +4,7 @@
 //! interpreter runs the instructions that it knows and stops at each other
 //! one: the caller runs that one with the rax executor.
 
-use std::cell::Cell;
+use std::cell::{Cell, OnceCell};
 
 use rax::arm::decoder::{ShiftType, ThumbDecoder};
 use rax::arm::execution::{add_with_carry, decode_imm_shift};
@@ -793,9 +793,9 @@ pub struct Block {
     /// For each instruction, the `fp_controls` number for which the executor completed it,
     /// or 0. The FP access checks of the executor pass again for this number.
     admitted: Vec<Cell<u64>>,
-    /// The instructions for the executor: an Advanced SIMD one has its A32 encoding, or
-    /// else the executor makes this copy at each run.
-    executor_insns: Vec<DecodedInsn>,
+    /// The 32-bit Thumb instructions that the executor ran, with their A32 encoding: an
+    /// Advanced SIMD one has it, or else the executor makes this copy at each run.
+    executor_insns: Vec<OnceCell<DecodedInsn>>,
     /// The values of the SimdImmediate operations.
     constants: Vec<u64>,
     insns: Vec<DecodedInsn>,
@@ -1873,14 +1873,6 @@ fn system(raw: u32) -> Op {
     }
 }
 
-fn executor_insn(insn: &DecodedInsn) -> DecodedInsn {
-    let mut insn = insn.clone();
-    if insn.state.is_thumb() && insn.size == 4 {
-        insn.raw = ThumbDecoder::a32_equivalent(insn.raw).unwrap_or(insn.raw);
-    }
-    insn
-}
-
 /// VLD1 or VST1 of full registers, in its T32 encoding.
 fn thumb_simd_memory(insn: &DecodedInsn) -> Op {
     let raw = insn.raw;
@@ -2823,7 +2815,7 @@ impl Block {
         Block {
             admitted: vec![Cell::new(0); steps.len()],
             constants,
-            executor_insns: insns.iter().map(executor_insn).collect(),
+            executor_insns: vec![OnceCell::new(); if thumb { steps.len() } else { 0 }],
             steps,
             insns,
             end_offset: at as u16,
@@ -2860,7 +2852,14 @@ impl Block {
     /// The instruction `index` in the form that the executor runs with the least work.
     #[inline]
     pub fn executor_insn(&self, index: usize) -> &DecodedInsn {
-        &self.executor_insns[index]
+        let insn = &self.insns[index];
+        if !self.thumb || insn.size != 4 {
+            return insn;
+        }
+        self.executor_insns[index].get_or_init(|| DecodedInsn {
+            raw: ThumbDecoder::a32_equivalent(insn.raw).unwrap_or(insn.raw),
+            ..insn.clone()
+        })
     }
 
     pub fn insns(&self) -> &[DecodedInsn] {
